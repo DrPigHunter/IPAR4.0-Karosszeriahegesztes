@@ -70,7 +70,7 @@ def build_parameter_audit(configurations: Iterable[dict[str, Any]]) -> list[dict
             "Erőhatár max (kN)": float(limits.force_max),
             "Névleges erő min (kN)": min(forces) if forces else None,
             "Névleges erő max (kN)": max(forces) if forces else None,
-            "Referencia-ellenőrzés": "FELÜLVIZSGÁLAT" if findings else "PLAUSZIBILIS, NEM HITLESÍTETT",
+            "Referencia-ellenőrzés": "FELÜLVIZSGÁLAT" if findings else "PLAUZIBILIS, NEM IGAZOLT",
             "Megjegyzések": " ".join(findings) if findings else (
                 "Az egyszerű referencia-szűrőn megfelelt. Ez nem bizonyítja, hogy a recept az adott "
                 "anyaghoz, lemezvastagsághoz, bevonathoz vagy pisztolyhoz megfelelő."
