@@ -1,10 +1,20 @@
 """Tests for operator-locked factory settings."""
 import unittest
 
-from src.factory_settings import FACTORY_EQUIPMENT_SETTINGS, apply_factory_settings
+from src.factory_settings import (
+    FACTORY_EQUIPMENT_SETTINGS,
+    SHIFT_BREAK_APPROX_WELD_POINTS,
+    SHIFT_BREAK_INTERVAL_BODIES,
+    apply_factory_settings,
+)
 
 
 class FactorySettingsTests(unittest.TestCase):
+    def test_head_change_is_code_defined_at_simulated_shift_break(self):
+        self.assertEqual(SHIFT_BREAK_INTERVAL_BODIES, 100)
+        self.assertEqual(SHIFT_BREAK_APPROX_WELD_POINTS, 14_000)
+        self.assertEqual(FACTORY_EQUIPMENT_SETTINGS["tool_change_interval_bodies"], 100)
+
     def test_saved_settings_are_overridden_by_factory_defaults(self):
         state = {
             "fault_rate": 0.1,
