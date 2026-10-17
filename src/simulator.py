@@ -1,4 +1,4 @@
-"""Generate simulated car-body spot-welding events and publish them over MQTT."""
+"""Simulate a welding cycle from the GitHub-versioned XLSX catalogue and publish via MQTT."""
 from __future__ import annotations
 
 import argparse
@@ -11,10 +11,11 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
+from src.catalog import get_configuration, list_configurations
+
 BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
 EVENT_TOPIC = "welding/events"
-BODY_TYPES: dict[str, int] = {"Sedan": 80, "SUV": 120, "Compact": 60}
 
 
 def utc_now() -> str:
@@ -22,50 +23,54 @@ def utc_now() -> str:
 
 
 def generate_body_events(
-    body_type: str, fault_rate: float = 0.04, seed: int | None = None
+    config_id: str, fault_rate: float = 0.04, seed: int | None = None
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Create a start event, simulated weld records, occasional faults, and a completion event."""
-    if body_type not in BODY_TYPES:
-        raise ValueError(f"Ismeretlen karosszériatípus: {body_type}")
+    """Generate a cycle using expected IDs, per-point nominal values, and limits from XLSX."""
     if not 0 <= fault_rate <= 1:
         raise ValueError("A fault_rate értékének 0 és 1 között kell lennie.")
-
+    config = get_configuration(config_id)
     rng = random.Random(seed)
     body_id = f"BODY-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
-    expected_ids = [f"W{i:03d}" for i in range(1, BODY_TYPES[body_type] + 1)]
+    common = {
+        "body_id": body_id, "config_id": config_id, "body_type": config["label"],
+        "brand": config["brand"], "model": config["model"], "part": config["part"],
+    }
+    expected_ids = list(config["expected_weld_ids"])
+    limits = config["limits"]
     events: list[dict[str, Any]] = [{
-        "event_type": "body_start",
-        "body_id": body_id,
-        "body_type": body_type,
-        "expected_weld_ids": expected_ids,
-        "expected_count": len(expected_ids),
-        "timestamp": utc_now(),
+        **common, "event_type": "body_start", "expected_weld_ids": expected_ids,
+        "expected_count": len(expected_ids), "timestamp": utc_now(),
     }]
 
-    for point_id in expected_ids:
-        # Simulate a missing transmission: no weld_result event is emitted for this point.
+    for point in config["points"]:
         if rng.random() < fault_rate * 0.35:
-            continue
-
+            continue  # Simulated lost weld-result event.
+        # Normal values are derived from the point's Excel nominal recipe with modest noise.
         event: dict[str, Any] = {
-            "event_type": "weld_result", "body_id": body_id, "body_type": body_type,
-            "weld_id": point_id, "current_ka": round(rng.uniform(7.6, 10.4), 2),
-            "weld_time_ms": round(rng.uniform(180, 320), 1),
-            "electrode_force_kn": round(rng.uniform(2.8, 4.2), 2), "timestamp": utc_now(),
+            **common, "event_type": "weld_result", "weld_id": point["weld_id"],
+            "current_ka": round(max(limits.current_min, min(limits.current_max,
+                point["nominal_current_ka"] + rng.uniform(-0.12, 0.12))), 2),
+            "weld_time_ms": round(max(limits.weld_time_min, min(limits.weld_time_max,
+                point["nominal_weld_time_ms"] + rng.uniform(-4.0, 4.0))), 1),
+            "electrode_force_kn": round(max(limits.force_min, min(limits.force_max,
+                point["nominal_electrode_force_kn"] + rng.uniform(-0.04, 0.04))), 2),
+            "timestamp": utc_now(),
         }
         if rng.random() < fault_rate:
             key = rng.choice(["current_ka", "weld_time_ms", "electrode_force_kn"])
-            event[key] = {"current_ka": 13.5, "weld_time_ms": 420.0, "electrode_force_kn": 5.8}[key]
+            event[key] = {
+                "current_ka": limits.current_max + 2.0,
+                "weld_time_ms": limits.weld_time_max + 60.0,
+                "electrode_force_kn": limits.force_max + 1.0,
+            }[key]
         events.append(event)
 
-        # Simulate duplicate delivery for the same weld point.
         if rng.random() < fault_rate * 0.25:
             duplicate = dict(event)
             duplicate["timestamp"] = utc_now()
             duplicate["duplicate_simulated"] = True
             events.append(duplicate)
 
-        # Simulate an unexpected point ID, as can happen with a wrong station/configuration.
         if rng.random() < fault_rate * 0.08:
             events.append({
                 **event, "weld_id": f"X{rng.randint(1, 999):03d}",
@@ -73,8 +78,8 @@ def generate_body_events(
             })
 
     events.append({
-        "event_type": "body_complete", "body_id": body_id, "body_type": body_type,
-        "expected_weld_ids": expected_ids, "expected_count": len(expected_ids), "timestamp": utc_now(),
+        **common, "event_type": "body_complete", "expected_weld_ids": expected_ids,
+        "expected_count": len(expected_ids), "timestamp": utc_now(),
     })
     return body_id, events
 
@@ -82,7 +87,7 @@ def generate_body_events(
 def publish_events(
     events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: int = 8
 ) -> None:
-    """Publish in order and wait for each QoS 1 message to be acknowledged by the client."""
+    """Publish events in order using MQTT QoS 1."""
     if delay_ms < 0:
         raise ValueError("A delay_ms nem lehet negatív.")
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"welding-publisher-{uuid.uuid4().hex[:8]}")
@@ -92,7 +97,7 @@ def publish_events(
         for event in events:
             info = client.publish(EVENT_TOPIC, json.dumps(event, ensure_ascii=False), qos=1)
             info.wait_for_publish(timeout=5)
-            if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            if info.rc != mqtt.MQTT_ERR_SUCCESS or not info.is_published():
                 raise RuntimeError(f"MQTT publikálási hiba: {info.rc}")
             if delay_ms > 0:
                 time.sleep(delay_ms / 1000)
@@ -102,17 +107,19 @@ def publish_events(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Szimulált karosszéria-ponthegesztés MQTT-publisher")
-    parser.add_argument("--body-type", choices=sorted(BODY_TYPES), default="Sedan")
+    configs = list_configurations()
+    labels = {cfg["config_id"]: cfg["label"] for cfg in configs}
+    parser = argparse.ArgumentParser(description="Excel katalógus alapú karosszéria-/alkatrész-hegesztés szimulátor")
+    parser.add_argument("--config-id", choices=sorted(labels), default=configs[0]["config_id"])
     parser.add_argument("--fault-rate", type=float, default=0.04, help="Szimulált hibák valószínűsége (0..1)")
     parser.add_argument("--host", default=BROKER_HOST)
     parser.add_argument("--port", type=int, default=BROKER_PORT)
     parser.add_argument("--delay-ms", type=int, default=8)
     args = parser.parse_args()
-    body_id, events = generate_body_events(args.body_type, args.fault_rate)
+    body_id, events = generate_body_events(args.config_id, args.fault_rate)
     publish_events(events, args.host, args.port, args.delay_ms)
     weld_events = sum(event.get("event_type") == "weld_result" for event in events)
-    print(f"Elküldve: {body_id} | {args.body_type} | {weld_events} hegesztési üzenet + indító és lezáró esemény")
+    print(f"Elküldve: {body_id} | {labels[args.config_id]} | {weld_events} hegesztési üzenet + indító és lezáró esemény")
 
 
 if __name__ == "__main__":
