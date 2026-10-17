@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.catalog import list_configurations
+from src.simulator import generate_body_events
 from src.monitor import (
     REWORK_DONE, REWORK_IN_PROGRESS, REWORK_WAITING, connect_db, process_event,
 )
@@ -83,6 +84,21 @@ class MonitorIntegrationTests(unittest.TestCase):
         body = self.conn.execute("SELECT status, parameter_errors FROM bodies WHERE body_id='BODY-TEST'").fetchone()
         self.assertEqual(body["status"], "SELEJT / UTÓMUNKÁRA KÜLDVE")
         self.assertGreater(body["parameter_errors"], 0)
+
+    def test_fault_free_cycles_for_all_models_pass_without_rework(self):
+        configs = list_configurations()
+        for config in configs:
+            body_id, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=123)
+            for event in events:
+                process_event(self.conn, event)
+            row = self.conn.execute(
+                "SELECT status FROM bodies WHERE body_id=?", (body_id,)
+            ).fetchone()
+            queue = self.conn.execute(
+                "SELECT body_id FROM rework_queue WHERE body_id=?", (body_id,)
+            ).fetchone()
+            self.assertEqual(row["status"], "MEGFELELŐ", msg=config["label"])
+            self.assertIsNone(queue, msg=config["label"])
 
     def test_good_sidewall_does_not_enter_rework(self):
         process_event(self.conn, body_start())
