@@ -338,6 +338,12 @@ def render_production_tab() -> None:
     if auto_state.get("error"):
         st.warning(f"MQTT-küldési hiba: {auto_state['error']} — ellenőrizd, hogy fut-e a Docker Desktop és a monitor.")
     st.progress(progress, text=f"Pontteljesség  {len(seen.intersection(config['expected_weld_ids']))} / {expected}  ·  {progress:.0%}")
+    duration_value = current_row.get("duration_seconds") if current_row is not None else None
+    if duration_value is not None and pd.notna(duration_value):
+        duration_text = f"Utolsó ciklusidő: {float(duration_value):.2f} mp · cél: 20 mp alatt"
+    else:
+        duration_text = "Ciklusidő: feldolgozás alatt · cél: 20 mp alatt"
+    st.caption(duration_text)
 
     latest = body_events.iloc[-1] if not body_events.empty else None
     metric_cols = st.columns(4)
