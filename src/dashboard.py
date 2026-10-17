@@ -268,6 +268,7 @@ def automatic_production_worker(
         inter_body_pause_seconds = scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent)
         cycle_started = time.monotonic()
         body_id = ""
+        publish_delay_ms = 0.0
         monitor_confirmed = False
         try:
             # Reload lets a local Git pull update the simulator when Streamlit has cached it.
