@@ -82,14 +82,37 @@ def _read_json_records(paths: list[Path], jsonl: bool = False) -> list[dict[str,
 
 
 def load_file_logs(log_dir: str | Path = DEFAULT_LOG_DIR) -> dict[str, pd.DataFrame]:
-    """Load the per-body JSON logs, daily JSONL logs, and operator/application log."""
+    """Load per-body, daily, application, console, and aggregate JSON logs."""
     root = Path(log_dir)
     if not root.exists():
-        return {"run_json": pd.DataFrame(), "daily_jsonl": pd.DataFrame(), "application_log": pd.DataFrame()}
+        return {
+            "run_json": pd.DataFrame(),
+            "daily_jsonl": pd.DataFrame(),
+            "application_log": pd.DataFrame(),
+            "aggregate_json": pd.DataFrame(),
+            "console_log": pd.DataFrame(),
+        }
+    summary_path = root / "production_summary.json"
+    aggregate_records = _read_json_records([summary_path]) if summary_path.exists() else []
+    console_records: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.log")):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    console_records.append({
+                        "source_file": path.name,
+                        "line": line_number,
+                        "timestamp": datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(timespec="seconds"),
+                        "message": line.rstrip("\r\n")[:30000],
+                    })
+        except OSError as exc:
+            console_records.append({"source_file": path.name, "read_error": str(exc)})
     return {
         "run_json": pd.DataFrame(_read_json_records(list(root.glob("run_*.json")))),
         "daily_jsonl": pd.DataFrame(_read_json_records(list(root.glob("production_*.jsonl")), jsonl=True)),
         "application_log": pd.DataFrame(_read_json_records(list(root.glob("application_*.jsonl")), jsonl=True)),
+        "aggregate_json": pd.DataFrame(aggregate_records),
+        "console_log": pd.DataFrame(console_records),
     }
 
 
@@ -264,7 +287,9 @@ def export_production_report(
         "Rendszerhibák": tables["system_errors"],
         "Futásnaplók": file_logs["run_json"],
         "Napi JSONL": file_logs["daily_jsonl"],
+        "Összesített JSON": file_logs["aggregate_json"],
         "Alkalmazás-napló": file_logs["application_log"],
+        "Konzolnapló": file_logs["console_log"],
         "Beállítások": settings,
     }
 
