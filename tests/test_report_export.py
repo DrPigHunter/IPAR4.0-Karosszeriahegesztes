@@ -29,7 +29,7 @@ class ReportExportTests(unittest.TestCase):
 
     def _record_one_cycle(self):
         config = list_configurations()[0]
-        _, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=123)
+        _, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=123, non_wear_defect_probability=0.0)
         for event in events:
             process_event(self.conn, event, log_dir=self.log_dir)
         return config
@@ -115,7 +115,7 @@ class ReportExportTests(unittest.TestCase):
         config = list_configurations()[0]
         wear_state = {"wear_percent": 10.0}
         body_id, events = generate_body_events(
-            config["config_id"], seed=55, wear_state=wear_state,
+            config["config_id"], seed=55, wear_state=wear_state, non_wear_defect_probability=0.0,
             wear_per_point_percent=0.03, wear_enabled=True, auto_correct_wear=True,
         )
         for event in events:
