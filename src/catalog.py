@@ -1,16 +1,14 @@
-"""Load version-controlled XLSX or Excel SpreadsheetML catalog (never from runtime DB)."""
+"""Load the native GitHub-versioned XLSX catalog (never from runtime DB)."""
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-import xml.etree.ElementTree as ET
 
 from src.rules import Limits
 
 ROOT = Path(__file__).resolve().parents[1]
 XLSX_PATH = ROOT / "config" / "welding_catalog.xlsx"
-XML_PATH = ROOT / "config" / "welding_catalog.xml"
 
 
 class CatalogError(RuntimeError):
@@ -53,74 +51,16 @@ def _read_xlsx(path: Path) -> dict[str, list[dict[str, Any]]]:
     return data
 
 
-def _read_spreadsheetml(path: Path) -> dict[str, list[dict[str, Any]]]:
-    """Read Excel 2003 SpreadsheetML XML, a real multi-sheet Excel format."""
-    ss = "{urn:schemas-microsoft-com:office:spreadsheet}"
-    try:
-        root = ET.parse(path).getroot()
-    except (ET.ParseError, OSError) as exc:
-        raise CatalogError(f"Nem olvasható az Excel XML munkafüzet: {exc}") from exc
-    data: dict[str, list[dict[str, Any]]] = {}
-    for worksheet in root.findall(f"{ss}Worksheet"):
-        sheet_name = worksheet.attrib.get(f"{ss}Name", "")
-        if sheet_name not in ("Modellek", "Hegesztési pontok"):
-            continue
-        table = worksheet.find(f"{ss}Table")
-        if table is None:
-            data[sheet_name] = []
-            continue
-        matrix: list[list[Any]] = []
-        for row_element in table.findall(f"{ss}Row"):
-            values: list[Any] = []
-            next_column = 1
-            for cell in row_element.findall(f"{ss}Cell"):
-                index = cell.attrib.get(f"{ss}Index")
-                if index is not None:
-                    target_column = int(index)
-                    while next_column < target_column:
-                        values.append(None)
-                        next_column += 1
-                data_element = cell.find(f"{ss}Data")
-                raw = data_element.text if data_element is not None else None
-                kind = data_element.attrib.get(f"{ss}Type", "String") if data_element is not None else "String"
-                if raw is None:
-                    parsed: Any = None
-                elif kind == "Number":
-                    number = float(raw)
-                    parsed = int(number) if number.is_integer() else number
-                else:
-                    parsed = raw
-                values.append(parsed)
-                next_column += 1
-            matrix.append(values)
-        if not matrix:
-            data[sheet_name] = []
-            continue
-        headers = [str(v).strip() if v is not None else "" for v in matrix[0]]
-        rows = []
-        for values in matrix[1:]:
-            values += [None] * max(0, len(headers) - len(values))
-            if not any(value is not None for value in values):
-                continue
-            rows.append({key: value for key, value in zip(headers, values) if key})
-        data[sheet_name] = rows
-    return data
-
-
 @lru_cache(maxsize=1)
 def load_catalog() -> dict[str, dict[str, Any]]:
     """Load model/part configs and spot-weld recipes from the GitHub-versioned workbook."""
-    if XLSX_PATH.exists():
-        data = _read_xlsx(XLSX_PATH)
-        source = XLSX_PATH
-    elif XML_PATH.exists():
-        data = _read_spreadsheetml(XML_PATH)
-        source = XML_PATH
-    else:
+    if not XLSX_PATH.exists():
         raise CatalogError(
-            f"Hiányzik a referencia-Excel: {XLSX_PATH} vagy {XML_PATH}. "
-            "Ellenőrizd, hogy a katalógusfájl jelen van-e a GitHub-repóban."
+            f"Hiányzik a GitHubon verziózott Excel-katalógus: {XLSX_PATH}. "
+            "Ellenőrizd, hogy a config/welding_catalog.xlsx fájl jelen van-e a repóban."
         )
+    data = _read_xlsx(XLSX_PATH)
+    source = XLSX_PATH
 
     required = {"Modellek", "Hegesztési pontok"}
     if not required.issubset(data):
