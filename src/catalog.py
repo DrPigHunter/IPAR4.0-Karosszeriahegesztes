@@ -1,16 +1,16 @@
-"""Load the version-controlled XLSX welding catalogue (never from the runtime DB)."""
+"""Load version-controlled XLSX or Excel SpreadsheetML catalog (never from runtime DB)."""
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
-from openpyxl import load_workbook
+import xml.etree.ElementTree as ET
 
 from src.rules import Limits
 
 ROOT = Path(__file__).resolve().parents[1]
-CATALOG_PATH = ROOT / "config" / "welding_catalog.xlsx"
+XLSX_PATH = ROOT / "config" / "welding_catalog.xlsx"
+XML_PATH = ROOT / "config" / "welding_catalog.xml"
 
 
 class CatalogError(RuntimeError):
@@ -25,45 +25,115 @@ def _as_float(row: dict[str, Any], key: str) -> float:
         raise CatalogError(f"Hiányzó vagy hibás Excel-beállítás: {key}={value!r}") from exc
 
 
+def _read_xlsx(path: Path) -> dict[str, list[dict[str, Any]]]:
+    try:
+        from openpyxl import load_workbook
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:
+        raise CatalogError(f"Nem olvasható az Excel XLSX munkafüzet: {exc}") from exc
+    data: dict[str, list[dict[str, Any]]] = {}
+    try:
+        for name in ("Modellek", "Hegesztési pontok"):
+            if name not in workbook.sheetnames:
+                continue
+            iterator = workbook[name].iter_rows(values_only=True)
+            header_row = next(iterator, None)
+            if not header_row:
+                data[name] = []
+                continue
+            headers = [str(v).strip() if v is not None else "" for v in header_row]
+            rows = []
+            for values in iterator:
+                if not any(value is not None for value in values):
+                    continue
+                rows.append({key: value for key, value in zip(headers, values) if key})
+            data[name] = rows
+    finally:
+        workbook.close()
+    return data
+
+
+def _read_spreadsheetml(path: Path) -> dict[str, list[dict[str, Any]]]:
+    """Read Excel 2003 SpreadsheetML XML, a real multi-sheet Excel format."""
+    ss = "{urn:schemas-microsoft-com:office:spreadsheet}"
+    try:
+        root = ET.parse(path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise CatalogError(f"Nem olvasható az Excel XML munkafüzet: {exc}") from exc
+    data: dict[str, list[dict[str, Any]]] = {}
+    for worksheet in root.findall(f"{ss}Worksheet"):
+        sheet_name = worksheet.attrib.get(f"{ss}Name", "")
+        if sheet_name not in ("Modellek", "Hegesztési pontok"):
+            continue
+        table = worksheet.find(f"{ss}Table")
+        if table is None:
+            data[sheet_name] = []
+            continue
+        matrix: list[list[Any]] = []
+        for row_element in table.findall(f"{ss}Row"):
+            values: list[Any] = []
+            next_column = 1
+            for cell in row_element.findall(f"{ss}Cell"):
+                index = cell.attrib.get(f"{ss}Index")
+                if index is not None:
+                    target_column = int(index)
+                    while next_column < target_column:
+                        values.append(None)
+                        next_column += 1
+                data_element = cell.find(f"{ss}Data")
+                raw = data_element.text if data_element is not None else None
+                kind = data_element.attrib.get(f"{ss}Type", "String") if data_element is not None else "String"
+                if raw is None:
+                    parsed: Any = None
+                elif kind == "Number":
+                    number = float(raw)
+                    parsed = int(number) if number.is_integer() else number
+                else:
+                    parsed = raw
+                values.append(parsed)
+                next_column += 1
+            matrix.append(values)
+        if not matrix:
+            data[sheet_name] = []
+            continue
+        headers = [str(v).strip() if v is not None else "" for v in matrix[0]]
+        rows = []
+        for values in matrix[1:]:
+            values += [None] * max(0, len(headers) - len(values))
+            if not any(value is not None for value in values):
+                continue
+            rows.append({key: value for key, value in zip(headers, values) if key})
+        data[sheet_name] = rows
+    return data
+
+
 @lru_cache(maxsize=1)
 def load_catalog() -> dict[str, dict[str, Any]]:
-    """Load all model/part configurations and weld-point recipes from the tracked Excel file."""
-    if not CATALOG_PATH.exists():
+    """Load model/part configs and spot-weld recipes from the GitHub-versioned workbook."""
+    if XLSX_PATH.exists():
+        data = _read_xlsx(XLSX_PATH)
+        source = XLSX_PATH
+    elif XML_PATH.exists():
+        data = _read_spreadsheetml(XML_PATH)
+        source = XML_PATH
+    else:
         raise CatalogError(
-            f"Nem található a konfigurációs Excel: {CATALOG_PATH}. "
-            "Ellenőrizd, hogy a config/welding_catalog.xlsx fájlt letöltötted-e a GitHub-repóból."
+            f"Hiányzik a referencia-Excel: {XLSX_PATH} vagy {XML_PATH}. "
+            "Ellenőrizd, hogy a katalógusfájl jelen van-e a GitHub-repóban."
         )
 
-    workbook = load_workbook(CATALOG_PATH, read_only=True, data_only=True)
-    required_sheets = {"Modellek", "Hegesztési pontok"}
-    if not required_sheets.issubset(set(workbook.sheetnames)):
-        raise CatalogError(f"Hiányzó munkalap az Excelben. Szükséges: {sorted(required_sheets)}")
-
-    def read_rows(sheet_name: str) -> list[dict[str, Any]]:
-        ws = workbook[sheet_name]
-        iterator = ws.iter_rows(values_only=True)
-        headers = next(iterator, None)
-        if not headers:
-            return []
-        names = [str(v).strip() if v is not None else "" for v in headers]
-        return [
-            {name: value for name, value in zip(names, values) if name}
-            for values in iterator
-            if any(value is not None for value in values)
-        ]
-
-    config_rows = read_rows("Modellek")
-    point_rows = read_rows("Hegesztési pontok")
-    workbook.close()
-
+    required = {"Modellek", "Hegesztési pontok"}
+    if not required.issubset(data):
+        raise CatalogError(f"{source.name}: hiányzó munkalap. Szükséges: {sorted(required)}")
+    config_rows, point_rows = data["Modellek"], data["Hegesztési pontok"]
     if not config_rows or not point_rows:
-        raise CatalogError("Az Excel konfigurációs vagy hegesztési pont munkalapja üres.")
+        raise CatalogError(f"{source.name}: a konfigurációs vagy hegesztési pont munkalap üres.")
 
     result: dict[str, dict[str, Any]] = {}
     for row in config_rows:
         config_id = str(row.get("config_id") or "").strip()
         if not config_id or config_id in result:
-            raise CatalogError(f"Hiányzó vagy duplikált config_id a Modellek munkalapon: {config_id!r}")
+            raise CatalogError(f"Hiányzó vagy duplikált config_id a Modellek lapon: {config_id!r}")
         brand, model, part = (str(row.get(k) or "").strip() for k in ("Gyártó", "Modell", "Alkatrész"))
         if not brand or not model or not part:
             raise CatalogError(f"Hiányos gyártó/modell/alkatrész konfiguráció: {config_id}")
@@ -103,11 +173,11 @@ def load_catalog() -> dict[str, dict[str, Any]]:
         config["points"].sort(key=lambda item: item["order"])
         ids = [p["weld_id"] for p in config["points"]]
         if len(ids) != len(set(ids)):
-            raise CatalogError(f"Duplikált hegesztési pontazonosító a konfigurációban: {config_id}")
+            raise CatalogError(f"Duplikált pontazonosító a konfigurációban: {config_id}")
         if len(ids) != config["expected_count"]:
             raise CatalogError(
                 f"{config_id}: Excel szerint {config['expected_count']} pont kell, "
-                f"de a Hegesztési pontok lapon {len(ids)} szerepel."
+                f"de a pontlapon {len(ids)} szerepel."
             )
         limits: Limits = config["limits"]
         for point in config["points"]:
@@ -118,27 +188,25 @@ def load_catalog() -> dict[str, dict[str, Any]]:
             ):
                 if not low <= point[key] <= high:
                     raise CatalogError(
-                        f"{config_id}/{point['weld_id']}: {key} névleges értéke "
-                        f"kívül esik a Modellek munkalapon megadott határokon."
+                        f"{config_id}/{point['weld_id']}: {key} névleges értéke kívül esik a modell határain."
                     )
         config["expected_weld_ids"] = ids
-
     return result
 
 
 def list_configurations() -> list[dict[str, Any]]:
-    """Return catalog configurations sorted for the UI."""
+    """Return model/part configurations sorted for the UI."""
     return sorted(load_catalog().values(), key=lambda cfg: (cfg["brand"], cfg["model"], cfg["part"]))
 
 
 def get_configuration(config_id: str) -> dict[str, Any]:
-    """Return one Excel-defined model/part configuration or raise a readable error."""
+    """Return one Excel-defined configuration."""
     try:
         return load_catalog()[config_id]
     except KeyError as exc:
-        raise CatalogError(f"Ismeretlen konfiguráció: {config_id!r}. Ellenőrizd a GitHubon lévő Excel katalógust.") from exc
+        raise CatalogError(f"Ismeretlen Excel-konfiguráció: {config_id!r}") from exc
 
 
 def reload_catalog() -> None:
-    """Clear in-process cache after the reference workbook has been replaced."""
+    """Clear cache after the reference workbook is replaced."""
     load_catalog.cache_clear()
