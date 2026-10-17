@@ -1,4 +1,4 @@
-"""Modern, compact two-tab Streamlit dashboard for automatic sidewall welding simulation."""
+"""Modern three-tab dashboard for manual control of automated sidewall welding simulation."""
 from __future__ import annotations
 
 import html
