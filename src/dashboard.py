@@ -606,7 +606,7 @@ def render_wear_controls() -> None:
             step=1,
             key="tool_change_interval_bodies_v1",
             disabled=production_active,
-            help="A ciklus egy bal oldalfalat jelöl, nem a teljes jármű összes hegesztési pontját. A 100 ciklus csak demonstrációs alapérték.",
+            help="Egy ciklus egy bal oldalfalat jelöl. 100 ciklus kb. 14 000 hegesztési pont 140 pont/ciklussal; ez nagyságrendileg összevethető a CORDIS SmartDress 10–30 ezer pontos fejlesztési céljával, de nem univerzális csereelőírás.",
         ))
     with change_duration_col:
         tool_change_duration_seconds = st.number_input(
