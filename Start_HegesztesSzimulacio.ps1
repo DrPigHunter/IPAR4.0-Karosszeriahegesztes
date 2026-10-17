@@ -107,11 +107,29 @@ Start-Process -FilePath "powershell.exe" -ArgumentList @(
     "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $dashboardCommand
 ) | Out-Null
 
+Write-Host "[5/5] A dashboard egeszsegi allapotanak ellenorzese..." -ForegroundColor Yellow
+$dashboardReady = $false
+for ($i = 0; $i -lt 45; $i++) {
+    try {
+        $health = Invoke-WebRequest -Uri "http://localhost:8501/_stcore/health" -UseBasicParsing -TimeoutSec 2
+        if ($health.StatusCode -eq 200 -and $health.Content -match "ok") {
+            $dashboardReady = $true
+            break
+        }
+    } catch {
+        # Streamlit may need a few seconds to import the app and open the port.
+    }
+    Start-Sleep -Seconds 1
+}
+if ($dashboardReady) {
+    Write-Host "A dashboard elerheto." -ForegroundColor Green
+} else {
+    Write-Warning "A dashboard 45 masodperc alatt nem jelezte az egeszseges allapotot. Ellenorizd a dashboard PowerShell-ablakot es a logs\dashboard.log fajlt."
+}
 Write-Host "[5/5] A bongeszo megnyitasa..." -ForegroundColor Yellow
-Start-Sleep -Seconds 3
 Start-Process "http://localhost:8501" | Out-Null
 
 Write-Host ""
-Write-Host "Elindult a BODYLINE szimulacio. Ne zarjad be a monitor es a dashboard ablakat." -ForegroundColor Green
-Write-Host "Leallitas: a webes feluleten kapcsold ki az automatikus gyartast, majd zarhatod a ket terminalt."
+Write-Host "A BODYLINE komponensek elinditasa megtortent. A gyartas alapbol all; az automatika gombbal indithato." -ForegroundColor Green
+Write-Host "A monitor- es dashboard-ablakot hagyd nyitva. Leallitas es naploexport a webes feluleten erheto el."
 Write-Host ""
