@@ -346,6 +346,50 @@ def _make_tool_change_frame(application_log: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+def _make_sources_frame() -> pd.DataFrame:
+    """Give the exported workbook a clear source trail for engineering assumptions."""
+    return pd.DataFrame([
+        {
+            "Forrás / kiadó": "TWI – How can I minimise electrode wear in resistance spot welding?",
+            "Felhasznált állítás": (
+                "Bevonatos/vastagabb acélhoz tipikusan legalább 6 l/perc hűtővíz; belépő max. 20 °C; "
+                "kilépő max. 30 °C. A kopást hő-/mechanikai hatások és bevonat-ötvöződés befolyásolja."
+            ),
+            "Projektbeli szerep": "Hűtési alapértékek és figyelmeztetési küszöbök.",
+            "URL": "https://www.twi-global.com/technical-knowledge/faqs/faq-how-can-i-minimise-electrode-wear-in-resistance-spot-welding",
+            "Korlát": "Referencia-feltétel; a tényleges hűtést a hegesztőpisztoly/elektróda és berendezés kézikönyve határozza meg.",
+        },
+        {
+            "Forrás / kiadó": "European Aluminium Association – Aluminium Automotive Manual, Resistance Welding (2015)",
+            "Felhasznált állítás": "Joule-hőbevitel Q ~ I²·R·t; acélnál tipikusan 15 kA alatti áram és 0,2–4 kN elektródaerő elegendő.",
+            "Projektbeli szerep": "Szintetikus hőbeviteli proxy és széles paraméter-plauzibilitási audit.",
+            "URL": "https://european-aluminium.eu/wp-content/uploads/2022/11/5-resistance-welding_2015.pdf",
+            "Korlát": "Általános berendezési referencia, nem konkrét járműmodell vagy hegesztési pont receptje.",
+        },
+        {
+            "Forrás / kiadó": "Wohner et al. – Welding in the World (2021), 22MnB5+AS150 study",
+            "Felhasznált állítás": "Egy konkrét 1,5 mm-es 22MnB5+AS150 kötés 4,6–6,0 kA tartományában mutatott hegeszthetőségi ablakot; elektródaerő-profilokat is vizsgáltak.",
+            "Projektbeli szerep": "Annak alátámasztása, hogy a jó áram/erő függ az anyagtól és a kötéskialakítástól.",
+            "URL": "https://link.springer.com/article/10.1007/s40194-020-01001-2",
+            "Korlát": "Csak a tanulmány konkrét anyagára, vastagságára, illesztésére és elektródájára érvényes.",
+        },
+        {
+            "Forrás / kiadó": "European Commission CORDIS – SMARTDRESS",
+            "Felhasznált állítás": "Optikai elektródakopás-figyelés, állapotfüggő dresszelési ütemezés és automatikus elektródacsere koncepció.",
+            "Projektbeli szerep": "A kopásalapú karbantartás és eszközcsere-szabályozás architekturális indoklása.",
+            "URL": "https://cordis.europa.eu/project/id/286598/reporting",
+            "Korlát": "A projekt nem szolgáltat univerzális X-karosszéria csereintervallumot; a jelenlegi 100-as érték demó-alapérték.",
+        },
+        {
+            "Forrás / kiadó": "Projektmérnöki megjegyzés",
+            "Felhasznált állítás": "0,005% / pont kopási ütem, 100 baloldalfal-ciklusos csere, 5 s szimulált csereidő, 0,1 kA és 5 ms korrekciós lépés, 95%-os minőségi cél.",
+            "Projektbeli szerep": "A demonstrációban használt beállítások.",
+            "URL": "docs/parameter_realism_audit.md",
+            "Korlát": "Ezek nem forrásból vett gyári paraméterek; helyi mérési adatok nélkül csak szemléltető kezdőértékek.",
+        },
+    ])
+
+
 def _excel_safe(frame: pd.DataFrame) -> pd.DataFrame:
     """Convert structured Python values to text before passing them to openpyxl."""
     result = frame.copy()
@@ -444,6 +488,7 @@ def export_production_report(
         "Kopás és önkorrekció": _make_wear_summary_frame(tables["weld_events"]),
         "Eszközcsere-napló": _make_tool_change_frame(file_logs["application_log"]),
         "Paraméter-audit": pd.DataFrame(build_parameter_audit(list_configurations())),
+        "Források": _make_sources_frame(),
         "Utómunka sor": tables["rework_queue"],
         "Utómunka műveletek": tables["rework_actions"],
         "Rendszerhibák": tables["system_errors"],
