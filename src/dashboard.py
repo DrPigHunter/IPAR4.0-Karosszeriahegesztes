@@ -1234,7 +1234,9 @@ def render_statistics_tab() -> None:
         st.markdown(
             "Források: [European Aluminium – Resistance Welding](https://european-aluminium.eu/wp-content/uploads/2022/11/5-resistance-welding_2015.pdf) · "
             "[Welding in the World – változó elektródaerő vizsgálata](https://link.springer.com/article/10.1007/s40194-020-01001-2) · "
-            "[TWI – elektródakopás és karbantartás](https://www.twi-global.com/technical-knowledge/faqs/faq-how-can-i-minimise-electrode-wear-in-resistance-spot-welding)"
+            "[TWI – elektródakopás és karbantartás](https://www.twi-global.com/technical-knowledge/faqs/faq-how-can-i-minimise-electrode-wear-in-resistance-spot-welding) · "
+            "[TWI – minőség és folyamatváltozók](https://www.twi-global.com/technical-knowledge/faqs/faq-what-must-be-done-to-ensure-the-quality-and-consistency-of-resistance-spot-welds) · "
+            "[ISIJ International – ponthegesztési hibák](https://www.jstage.jst.go.jp/article/isijinternational/54/8/54_1883/_html/-char/en)"
         )
     if bodies.empty:
         st.info("Az adatbázis még nem kapott karosszéria-eseményt. Ellenőrizd a Docker MQTT-brokert és a python -m src.monitor folyamatot.")
