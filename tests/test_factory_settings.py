@@ -2,6 +2,7 @@
 import unittest
 
 from src.factory_settings import (
+    DEFAULT_NON_WEAR_DEFECT_PROBABILITY,
     FACTORY_EQUIPMENT_SETTINGS,
     SHIFT_BREAK_APPROX_WELD_POINTS,
     SHIFT_BREAK_INTERVAL_BODIES,
@@ -15,9 +16,14 @@ class FactorySettingsTests(unittest.TestCase):
         self.assertEqual(SHIFT_BREAK_APPROX_WELD_POINTS, 14_000)
         self.assertEqual(FACTORY_EQUIPMENT_SETTINGS["tool_change_interval_bodies"], 100)
 
+    def test_non_wear_defect_probability_is_low_and_locked_by_default(self):
+        self.assertEqual(DEFAULT_NON_WEAR_DEFECT_PROBABILITY, 0.0001)
+        self.assertEqual(FACTORY_EQUIPMENT_SETTINGS["non_wear_defect_probability"], 0.0001)
+
     def test_saved_settings_are_overridden_by_factory_defaults(self):
         state = {
             "fault_rate": 0.1,
+            "non_wear_defect_probability": 0.4,
             "fault_mode": "outside_limits",
             "wear_enabled": False,
             "wear_per_point_percent": 0.04,
