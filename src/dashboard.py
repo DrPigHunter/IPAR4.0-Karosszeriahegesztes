@@ -189,6 +189,49 @@ def session_bodies_only(bodies: pd.DataFrame) -> pd.DataFrame:
     return bodies.loc[started_at >= session_start - pd.Timedelta(seconds=2)].copy()
 
 
+def render_fault_controls() -> None:
+    """Let the operator configure injected faults before starting production."""
+    st.markdown("### Pontonkénti eltérés beállítása")
+    rate_col, mode_col = st.columns([1, 1])
+    with rate_col:
+        fault_rate_percent = st.slider(
+            "Egy hegesztési pont eltérésének esélye (%)",
+            min_value=0.0,
+            max_value=0.1,
+            value=0.0,
+            step=0.001,
+            format="%.3f%%",
+            key="fault_rate_percent_v3",
+            help="0,000% esetén nincs mesterséges eltérés. A beállítás minden hegesztési pontra külön érvényes.",
+        )
+    with mode_col:
+        fault_mode_label = st.selectbox(
+            "Az eltérés viselkedése",
+            options=[
+                "Megengedett tartományon belül marad (megfelelő)",
+                "Átlépi a határértéket (utómunka)",
+            ],
+            index=0,
+            key="fault_mode_choice_v3",
+            help=(
+                "Az első mód a mérési értéket a megengedett határon belül tartja. "
+                "A második mód a kiválasztott ponton szándékosan határértéken kívüli értéket hoz létre."
+            ),
+        )
+    st.session_state["selected_fault_rate"] = float(fault_rate_percent) / 100.0
+    st.session_state["selected_fault_mode"] = (
+        "outside_limits" if fault_mode_label.startswith("Átlépi") else "within_limits"
+    )
+    st.session_state["auto_state"]["fault_rate"] = st.session_state["selected_fault_rate"]
+    st.session_state["auto_state"]["fault_mode"] = st.session_state["selected_fault_mode"]
+    mode_description = (
+        "a kijelölt eltérés határértéken kívülre kerül (utómunka várható)"
+        if st.session_state["auto_state"]["fault_mode"] == "outside_limits"
+        else "a kijelölt eltérés a határértéken belül marad (megfelelő)"
+    )
+    st.caption(f"Beállítva: {fault_rate_percent:.3f}% pontonként · {mode_description}. Az értékek indításig módosíthatók.")
+
+
 def start_automatic_production() -> None:
     """Start production only after the operator presses the start button."""
     old_thread = st.session_state.get("auto_thread")
@@ -460,6 +503,8 @@ def render_statistics_tab() -> None:
     actions = all_actions[all_actions["body_id"].astype(str).isin(session_ids)].copy() if not all_actions.empty else all_actions
     st.markdown("## Minőségügyi áttekintés")
     st.caption("A fő statisztika csak a mostani böngésző-munkamenetben indult oldalfalakat számolja; a korábbi futások az előzményekben maradnak.")
+    # This control panel must remain visible even before the first body exists.
+    render_fault_controls()
     if bodies.empty:
         st.info("Az adatbázis még nem kapott karosszéria-eseményt. Ellenőrizd a Docker MQTT-brokert és a python -m src.monitor folyamatot.")
         return
@@ -502,44 +547,7 @@ def render_statistics_tab() -> None:
             st.caption("Még nincs lezárt karosszéria.")
         else:
             st.dataframe(status_counts, use_container_width=True, hide_index=True, height=260)
-        st.markdown("### Pontonkénti eltérés beállítása")
-        fault_rate_percent = st.slider(
-            "Egy hegesztési pont eltérésének esélye (%)",
-            min_value=0.0,
-            max_value=0.1,
-            value=0.0,
-            step=0.001,
-            format="%.3f%%",
-            key="fault_rate_percent_v3",
-            help="0,000% esetén nem kerül be mesterséges eltérés. A beállítás pontonként értendő, nem karosszériánként.",
-        )
-        fault_mode_label = st.selectbox(
-            "Az eltérés viselkedése",
-            options=[
-                "Megengedett tartományon belül marad (megfelelő)",
-                "Átlépi a határértéket (utómunka)",
-            ],
-            index=0,
-            key="fault_mode_choice_v3",
-            help=(
-                "Az első mód a mérést a megengedett alsó vagy felső határ közelébe viszi, de nem lépi át. "
-                "A második mód egy kis lépéssel a határon kívülre állít egy paramétert."
-            ),
-        )
-        # Store settings independently from worker lifecycle so the operator can
-        # configure them while production is stopped and start with these exact values.
-        st.session_state["selected_fault_rate"] = float(fault_rate_percent) / 100.0
-        st.session_state["selected_fault_mode"] = (
-            "outside_limits"
-            if fault_mode_label.startswith("Átlépi")
-            else "within_limits"
-        )
-        st.session_state["auto_state"]["fault_rate"] = st.session_state["selected_fault_rate"]
-        st.session_state["auto_state"]["fault_mode"] = st.session_state["selected_fault_mode"]
-        st.caption(
-            f"Pontonkénti esély: {fault_rate_percent:.3f}% · "
-            f"{'a kiválasztott pont továbbra is megfelelő' if st.session_state['auto_state']['fault_mode'] == 'within_limits' else 'az eltérés határon kívülre kerül'}."
-        )
+
 
     st.markdown("### Automatikus utómunka-sor")
     if rework.empty:
