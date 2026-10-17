@@ -23,7 +23,7 @@ def utc_now() -> str:
 
 
 def generate_body_events(
-    config_id: str, fault_rate: float = 0.04, seed: int | None = None
+    config_id: str, fault_rate: float = 0.0001, seed: int | None = None
 ) -> tuple[str, list[dict[str, Any]]]:
     """Generate a cycle using expected IDs, per-point nominal values, and limits from XLSX."""
     if not 0 <= fault_rate <= 1:
@@ -111,7 +111,7 @@ def main() -> None:
     labels = {cfg["config_id"]: cfg["label"] for cfg in configs}
     parser = argparse.ArgumentParser(description="Excel katalógus alapú karosszéria-/alkatrész-hegesztés szimulátor")
     parser.add_argument("--config-id", choices=sorted(labels), default=configs[0]["config_id"])
-    parser.add_argument("--fault-rate", type=float, default=0.04, help="Szimulált hibák valószínűsége (0..1)")
+    parser.add_argument("--fault-rate", type=float, default=0.0001, help="Szimulált hibák valószínűsége (0..1; alapérték: 0.0001)")
     parser.add_argument("--host", default=BROKER_HOST)
     parser.add_argument("--port", type=int, default=BROKER_PORT)
     parser.add_argument("--delay-ms", type=int, default=8)
