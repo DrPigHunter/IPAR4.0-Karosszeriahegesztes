@@ -219,6 +219,14 @@ def process_event(
             )
             for row in rows
         )
+        wear_failed_ids = [
+            str(row["weld_id"])
+            for row in rows
+            if any(
+                "Elektródakopás miatti minőségi eltérés" in str(error)
+                for error in json.loads(row["errors_json"])
+            )
+        ]
         result = evaluate_body(expected_ids, received_ids, parameter_errors)
         start_row = conn.execute(
             "SELECT started_received_at FROM bodies WHERE body_id=?", (body_id,)
@@ -252,6 +260,13 @@ def process_event(
                 reason_parts.append(f"Váratlan pontok: {', '.join(result['unexpected_ids'])}")
             if result["duplicate_ids"]:
                 reason_parts.append(f"Duplikált pontok: {', '.join(result['duplicate_ids'])}")
+            if wear_failed_ids:
+                sample_ids = ", ".join(wear_failed_ids[:10])
+                suffix = " …" if len(wear_failed_ids) > 10 else ""
+                reason_parts.append(
+                    f"Elektródakopás miatti sikertelen korrekció: {len(wear_failed_ids)} pont "
+                    f"(például: {sample_ids}{suffix})"
+                )
             if parameter_errors:
                 reason_parts.append(f"Paraméterhibák: {parameter_errors}")
             reason = "; ".join(reason_parts) or "A karosszéria nem felelt meg az ellenőrzésnek."
