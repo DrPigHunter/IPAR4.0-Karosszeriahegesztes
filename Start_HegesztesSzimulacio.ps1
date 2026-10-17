@@ -66,6 +66,27 @@ if ($LASTEXITCODE -ne 0) {
 & docker compose up -d mqtt
 if ($LASTEXITCODE -ne 0) { throw "Az MQTT-broker nem indult el. Ellenorizd a Docker Desktop allapotat." }
 
+# Stop old monitor/dashboard Python processes from this checkout. Otherwise port 8501
+# or Python's cached modules can keep serving an older version after git pull.
+Write-Host "Regi BODYLINE monitor/dashboard folyamatok leallitasa..." -ForegroundColor Yellow
+$rootNormalized = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
+$staleProcesses = Get-CimInstance Win32_Process | Where-Object {
+    $_.ProcessId -ne $PID -and
+    -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+    $_.CommandLine.IndexOf($rootNormalized, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+    (($_.CommandLine -match 'src\.monitor') -or
+     ($_.CommandLine -match 'streamlit\s+run\s+src/dashboard\.py'))
+}
+foreach ($process in $staleProcesses) {
+    try {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        Write-Host ("Leallitva: PID {0} ({1})" -f $process.ProcessId, $process.Name) -ForegroundColor DarkGray
+    } catch {
+        Write-Host ("A regi PID {0} nem allithato le: {1}" -f $process.ProcessId, $_.Exception.Message) -ForegroundColor DarkYellow
+    }
+}
+Start-Sleep -Seconds 2
+
 # Open the monitor and dashboard in separate PowerShell windows.
 Write-Host "[4/5] Monitor es kezelofelulet inditasa..." -ForegroundColor Yellow
 $quotedRoot = $root.Replace("'", "''")
