@@ -290,6 +290,47 @@ def _make_wear_summary_frame(events: pd.DataFrame) -> pd.DataFrame:
     ])
 
 
+def _make_tool_change_frame(application_log: pd.DataFrame) -> pd.DataFrame:
+    """Extract automatic and operator-triggered tool changes into a dedicated report sheet."""
+    columns = [
+        "Időpont", "Csere módja", "Előző eszköz", "Új eszköz", "Eszközcsere sorszáma",
+        "Csere előtti kopás (%)", "Teljes karosszéria azonosítója",
+        "Karosszéria-intervallum", "Karosszériák az előző csere óta",
+        "Az előző eszköz pontjai", "Az előző eszköz sikeres korrekciói",
+        "Az előző eszköz sikertelen korrekciói",
+    ]
+    rows: list[dict[str, Any]] = []
+    if not application_log.empty:
+        for _, log_row in application_log.iterrows():
+            if str(log_row.get("event") or "") != "electrode_tool_replaced":
+                continue
+            details = log_row.get("details", {})
+            if isinstance(details, str):
+                try:
+                    details = json.loads(details)
+                except json.JSONDecodeError:
+                    details = {}
+            if not isinstance(details, dict):
+                details = {}
+            rows.append({
+                "Időpont": log_row.get("timestamp"),
+                "Csere módja": details.get("change_mode", "Ismeretlen"),
+                "Előző eszköz": details.get("previous_tool_number"),
+                "Új eszköz": details.get("new_tool_number"),
+                "Eszközcsere sorszáma": details.get("tool_change_number"),
+                "Csere előtti kopás (%)": details.get("wear_percent_before_reset"),
+                "Teljes karosszéria azonosítója": details.get("completed_body_id", ""),
+                "Karosszéria-intervallum": details.get("replacement_interval_bodies"),
+                "Karosszériák az előző csere óta": details.get("bodies_since_previous_change"),
+                "Az előző eszköz pontjai": details.get("tool_weld_points_before_reset"),
+                "Az előző eszköz sikeres korrekciói": details.get("tool_corrected_points_before_reset"),
+                "Az előző eszköz sikertelen korrekciói": details.get("tool_uncorrectable_points_before_reset"),
+            })
+    if not rows:
+        return pd.DataFrame([{"Megjegyzés": "Ebben a naplóban még nincs automatikus vagy kézi eszközcsere."}])
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _excel_safe(frame: pd.DataFrame) -> pd.DataFrame:
     """Convert structured Python values to text before passing them to openpyxl."""
     result = frame.copy()
@@ -337,6 +378,8 @@ def export_production_report(
     wear_enabled: bool = True,
     wear_per_point_percent: float = 0.03,
     auto_correct_wear: bool = True,
+    auto_tool_change_enabled: bool = True,
+    tool_change_interval_bodies: int = 100,
 ) -> tuple[Path, bytes, dict[str, Any]]:
     """Write a dated Excel report to disk and return its bytes for browser download."""
     now = export_timestamp or datetime.now().astimezone()
@@ -364,6 +407,8 @@ def export_production_report(
         {"Beállítás": "Elektródakopás modellezése", "Érték": bool(wear_enabled)},
         {"Beállítás": "Kopás hegesztési pontonként (%)", "Érték": float(wear_per_point_percent)},
         {"Beállítás": "Automatikus önkorrekció", "Érték": bool(auto_correct_wear)},
+        {"Beállítás": "Automatikus eszközcsere", "Érték": bool(auto_tool_change_enabled)},
+        {"Beállítás": "Eszközcsere minden X karosszéria után", "Érték": int(tool_change_interval_bodies)},
         {"Beállítás": "Minőségi célérték (%)", "Érték": 95.0},
         {"Beállítás": "Automatika leállt az exportig", "Érték": bool(automatic_worker_stopped)},
         {"Beállítás": "Megjegyzés", "Érték": "A részletes lapok minden elérhető adatbázisrekordot tartalmaznak, nem csak a képernyőn látható legutóbbi sorokat."},
@@ -374,6 +419,7 @@ def export_production_report(
         "Karosszériák": tables["bodies"],
         "Hegesztési adatok": tables["weld_events"],
         "Kopás és önkorrekció": _make_wear_summary_frame(tables["weld_events"]),
+        "Eszközcsere-napló": _make_tool_change_frame(file_logs["application_log"]),
         "Utómunka sor": tables["rework_queue"],
         "Utómunka műveletek": tables["rework_actions"],
         "Rendszerhibák": tables["system_errors"],
