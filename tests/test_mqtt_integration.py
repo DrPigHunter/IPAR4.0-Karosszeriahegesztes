@@ -27,7 +27,7 @@ class MqttEndToEndTests(unittest.TestCase):
 
     def publish_cycle(self, inject_out_of_range_parameter: bool = False) -> tuple[str, dict]:
         config = list_configurations()[0]
-        body_id, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=731)
+        body_id, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=731, non_wear_defect_probability=0.0)
         if inject_out_of_range_parameter:
             limits = config["limits"]
             weld_event = next(event for event in events if event.get("event_type") == "weld_result")
