@@ -115,7 +115,7 @@ A külön fejlesztési ág kopási indexet, (I^2 t) alapú szintetikus hőbevite
 
 Az elektródakopás a karosszériaciklusok között is megmarad, és a `data/equipment_state.json` fájlban újraindítás után is folytatódik. A csereintervallum **lezárt baloldalfal-ciklusban** állítható. Az intervallum elérése után az eszközcsere a következő ciklusok közötti szünetben történik: a régi eszköz állapota naplózódik, majd az új eszköz kopása 0%-ról indul. A szimulált csereidő a normál szünetből fogy; hosszabb csere esetén a leállás is hosszabb. Automatikus csere kikapcsolásakor a gyártás biztonságosan megáll, és kézi eszközcserét kér.
 
-Az Excel-export külön `Kopás és önkorrekció`, `Eszközcsere-napló` és `Paraméter-audit` munkalapokat tartalmazza.
+Az Excel-export külön `Kopás és önkorrekció`, `Eszközcsere-napló`, `Paraméter-audit` és `Források` munkalapokat tartalmazza, így a felhasznált hűtési referenciaértékek és az egyedi tanulmányokra vonatkozó korlátozások a jelentésben is visszakereshetők.
 
 **Műszaki korlátozás:** az áramlépés/önkorrekció, kopásráta, csereintervallum, csereidő és a 95%-os minőségi proxy demonstrációs paraméterek, nem hitelesített gyári receptértékek. A hűtés alapértékei a TWI bevonatos/vastagabb acélhoz adott referenciaértékei (6 l/perc, max. 20 °C belépő és 30 °C kilépő), de más anyag-/pisztoly-/hűtőrendszer esetén ezeket az adott berendezés specifikációja szerint kell beállítani. A dashboard referencia-auditja csak széles plausibilitási szűrő; nem helyettesít anyag- és illesztésspecifikus hegesztési tartományvizsgálatot.
 
