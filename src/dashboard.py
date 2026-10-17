@@ -150,22 +150,43 @@ def automatic_production_worker(
         options = [value for value in config_ids if value != previous_config] or config_ids
         config_id = random.choice(options)
         previous_config = config_id
+        fault_rate = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
+        fault_mode = str(state.get("fault_mode", "within_limits"))
+        cycle_started = time.monotonic()
+        body_id = ""
         try:
             # Streamlit reruns the dashboard but may keep imported modules cached.
             # Reload the simulator module so changes pulled from Git are picked up here too.
             importlib.reload(simulator_module)
             body_id, events = simulator_module.generate_body_events(
                 config_id,
-                fault_rate=float(state.get("fault_rate", DEFAULT_FAULT_RATE)),
-                fault_mode=str(state.get("fault_mode", "within_limits")),
+                fault_rate=fault_rate,
+                fault_mode=fault_mode,
             )
             state["body_id"] = body_id
             state["config_id"] = config_id
             state["last_started_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
             state["error"] = None
+            safe_application_log("body_cycle_started", {
+                "body_id": body_id,
+                "config_id": config_id,
+                "fault_rate_percent": round(fault_rate * 100.0, 3),
+                "fault_mode": fault_mode,
+                "generated_event_count": len(events),
+            })
             simulator_module.publish_events(events, delay_ms=PUBLISH_DELAY_MS)
+            elapsed = round(time.monotonic() - cycle_started, 3)
             state["completed_cycles"] = int(state.get("completed_cycles", 0)) + 1
             state["last_sent_body_id"] = body_id
+            safe_application_log("body_cycle_published", {
+                "body_id": body_id,
+                "config_id": config_id,
+                "fault_rate_percent": round(fault_rate * 100.0, 3),
+                "fault_mode": fault_mode,
+                "generated_event_count": len(events),
+                "publish_duration_seconds": elapsed,
+                "within_20_second_target": elapsed < 20.0,
+            })
         except Exception as exc:
             detail = str(exc)
             if "unexpected keyword argument 'fault_mode'" in detail:
@@ -175,6 +196,14 @@ def automatic_production_worker(
                     f"Részlet: {detail}"
                 )
             state["error"] = detail
+            safe_application_log("body_cycle_failed", {
+                "body_id": body_id,
+                "config_id": config_id,
+                "fault_rate_percent": round(fault_rate * 100.0, 3),
+                "fault_mode": fault_mode,
+                "error": detail,
+                "elapsed_seconds": round(time.monotonic() - cycle_started, 3),
+            }, level="ERROR")
         # A full cycle must finish before the separate 10-second inter-body pause begins.
         stop_event.wait(BETWEEN_BODIES_PAUSE_SECONDS)
     state["running"] = False
@@ -226,6 +255,17 @@ def render_fault_controls() -> None:
     )
     st.session_state["auto_state"]["fault_rate"] = st.session_state["selected_fault_rate"]
     st.session_state["auto_state"]["fault_mode"] = st.session_state["selected_fault_mode"]
+    current_fault_settings = (
+        round(float(fault_rate_percent), 3),
+        st.session_state["selected_fault_mode"],
+    )
+    previous_fault_settings = st.session_state.get("last_logged_fault_settings")
+    if previous_fault_settings != current_fault_settings:
+        safe_application_log("fault_test_settings_changed", {
+            "fault_rate_percent": current_fault_settings[0],
+            "fault_mode": current_fault_settings[1],
+        })
+        st.session_state["last_logged_fault_settings"] = current_fault_settings
     mode_description = (
         "a kijelölt eltérés határértéken kívülre kerül (utómunka várható)"
         if st.session_state["auto_state"]["fault_mode"] == "outside_limits"
