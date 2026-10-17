@@ -30,7 +30,7 @@ A teszt csak **széles plausibilitási szűrő**. Nem igazolja, hogy az adott é
 | Önkorrekciós időlépés | 5 ms | Numerikus szimulációs lépés, nem gyártói érték. |
 | Szintetikus minőségi cél | 95% | Demonstrációs hőbeviteli proxy küszöbe, nem szabványos elfogadási határ. |
 | Kopásnövekedés | 0,005 százalékpont / pont | Állítható szimulációs paraméter. Nem egy gyárban mért valódi elektródakopási sebesség. |
-| Csereintervallum | 100 lezárt **baloldalfal-ciklus** | Egy oldalfal kb. 140 pontjával ez nagyjából 14 000 hegesztés. Ez az EU CORDIS SmartDress projektjében említett 10 000–30 000 pont közötti elektróda-élettartam fejlesztési céljával azonos nagyságrend, de nem univerzális csereelőírás; valós üzemi adatok alapján kell beállítani. |
+| Hegesztőfej-/elektródaegység-csere | 100 lezárt **baloldalfal-ciklus** | A projekt ezt kódalapú szimulált műszakszüneti karbantartási pontként kezeli. Egy oldalfal kb. 140 pontjával ez nagyjából 14 000 hegesztés; nagyságrendileg összevethető a CORDIS SmartDress fejlesztési céljával, de nem valós üzem hivatalos szünetrendje vagy univerzális csereelőírása. |
 | Szimulált eszközcsere-idő | 5 másodperc | A gépi modell szünetéből elfogyasztott szimulációs idő, nem állítás az ipari hegycserélő fizikai idejéről. |
 | Hűtővíz | 6 l/perc; 20 °C be; 30 °C ki | TWI referencia bevonatos/vastagabb acélhoz. A hűtési értékek eltérésénél figyelmeztetés és magasabb szimulált kopási stressz jelenik meg. |
 | Pontonkénti hibainjektálás | Alapból 0%; legfeljebb 0,1% | Tesztparaméter a felügyeleti rendszer bemutatására, nem valós gyári selejtarány. |
@@ -40,7 +40,7 @@ A kopásmodell az (I^2 t) összefüggésből indul ki, majd a kopás és a hűt�
 
 ## Eszközcsere a szünetben
 
-Az eszközcsere-intervallum elérésekor a rendszer **nem nullázza azonnal** a kopást. Megjelöli a cserét, lezárja a karosszériát, és a következő ciklusok közötti szünetben hajtja végre a szimulált cserét. A normál 10 másodperces szünetből a beállított 5 másodperces csereidő fogy; ha a csereidő a szünetnél hosszabb, a leállás meghosszabbodik. Ezután nő az eszköz sorszáma, 0%-ra áll az aktuális kopás, és lenullázódnak az aktuális eszköz statisztikái. Az összes élettartam-statisztika megmarad.
+A 100 lezárt oldalfal elérésekor a rendszer **nem nullázza azonnal** a kopást. Megjelöli a hegesztőfej-/elektródaegység cseréjét, lezárja a karosszériát, és a következő ciklusok közötti állásidőben hajtja végre a szimulált cserét. A normál 10 másodperces állásidőből az alapértelmezett 5 másodperces csereidő fogy; ha a csereidő az állásidőnél hosszabb, a szünet meghosszabbodik. Ezután nő az egység sorszáma, 0%-ra áll az aktuális kopás, és lenullázódnak az aktuális eszköz statisztikái. Az összes élettartam-statisztika megmarad. A 100 ciklus/14 000 pont érték a szimuláció munkafolyamatát rögzíti, és nem állítja, hogy minden üzemben 100 oldalfal után kell cserélni.
 
 Ha az automatikus csere ki van kapcsolva, a gyártás az intervallum elérésekor leáll és kézi cserét kér. A kopási állapot a `data/equipment_state.json` állományba is mentődik, ezért az alkalmazás újraindítása nem indítja újra nulláról az eszköz élettartamát. A csere a kezelői naplóba és az Excel `Eszközcsere-napló` munkalapjára kerül.
 
