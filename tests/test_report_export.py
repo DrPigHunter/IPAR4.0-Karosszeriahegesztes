@@ -88,7 +88,7 @@ class ReportExportTests(unittest.TestCase):
             "Összesítő", "Modellenként", "Karosszériák", "Hegesztési adatok",
             "Utómunka sor", "Utómunka műveletek", "Rendszerhibák",
             "Futásnaplók", "Napi JSONL", "Összesített JSON", "Alkalmazás-napló",
-            "Konzolnapló", "Beállítások", "Kopás és önkorrekció",
+            "Konzolnapló", "Beállítások", "Kopás és önkorrekció", "Eszközcsere-napló",
         }
         self.assertTrue(required_sheets.issubset(set(workbook.sheetnames)))
         self.assertEqual(workbook["Karosszériák"].max_row, 2)
@@ -117,6 +117,23 @@ class ReportExportTests(unittest.TestCase):
         )
         for event in events:
             process_event(self.conn, event, log_dir=self.log_dir)
+        append_application_log(
+            "electrode_tool_replaced",
+            {
+                "change_mode": "AUTO",
+                "completed_body_id": body_id,
+                "previous_tool_number": 1,
+                "new_tool_number": 2,
+                "tool_change_number": 1,
+                "wear_percent_before_reset": 18.5,
+                "replacement_interval_bodies": 2,
+                "bodies_since_previous_change": 2,
+                "tool_weld_points_before_reset": config["expected_count"],
+                "tool_corrected_points_before_reset": 12,
+                "tool_uncorrectable_points_before_reset": 1,
+            },
+            log_dir=self.log_dir,
+        )
 
         path, data, _ = export_production_report(
             session_started_at=time.time() - 120,
@@ -129,6 +146,8 @@ class ReportExportTests(unittest.TestCase):
             wear_enabled=True,
             wear_per_point_percent=0.03,
             auto_correct_wear=True,
+            auto_tool_change_enabled=True,
+            tool_change_interval_bodies=2,
         )
         self.assertTrue(path.exists())
         workbook = load_workbook(BytesIO(data), read_only=True, data_only=True)
@@ -144,6 +163,16 @@ class ReportExportTests(unittest.TestCase):
         self.assertEqual(setting_values["Elektródakopás modellezése"], True)
         self.assertEqual(setting_values["Kopás hegesztési pontonként (%)"], 0.03)
         self.assertEqual(setting_values["Automatikus önkorrekció"], True)
+        self.assertEqual(setting_values["Automatikus eszközcsere"], True)
+        self.assertEqual(setting_values["Eszközcsere minden X karosszéria után"], 2)
+
+        tool_changes = pd.read_excel(BytesIO(data), sheet_name="Eszközcsere-napló")
+        self.assertEqual(len(tool_changes), 1)
+        self.assertEqual(tool_changes.iloc[0]["Csere módja"], "AUTO")
+        self.assertEqual(tool_changes.iloc[0]["Előző eszköz"], 1)
+        self.assertEqual(tool_changes.iloc[0]["Új eszköz"], 2)
+        self.assertEqual(tool_changes.iloc[0]["Karosszéria-intervallum"], 2)
+        self.assertAlmostEqual(tool_changes.iloc[0]["Csere előtti kopás (%)"], 18.5)
 
     def test_two_exports_with_same_second_keep_distinct_files(self):
         timestamp = datetime(2026, 10, 17, 18, 42, 0, tzinfo=timezone.utc)
