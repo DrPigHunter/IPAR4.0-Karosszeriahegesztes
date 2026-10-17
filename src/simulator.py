@@ -117,7 +117,7 @@ def generate_body_events(
 
 
 def publish_events(
-    events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: int = 90
+    events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: float = 90.0
 ) -> None:
     """Publish events in order with fresh send timestamps and MQTT QoS 1.
 
@@ -154,7 +154,7 @@ def main() -> None:
     parser.add_argument("--fault-mode", choices=FAULT_MODES, default="within_limits")
     parser.add_argument("--host", default=BROKER_HOST)
     parser.add_argument("--port", type=int, default=BROKER_PORT)
-    parser.add_argument("--delay-ms", type=int, default=90)
+    parser.add_argument("--delay-ms", type=float, default=90.0)
     args = parser.parse_args()
     body_id, events = generate_body_events(args.config_id, args.fault_rate, fault_mode=args.fault_mode)
     publish_events(events, args.host, args.port, args.delay_ms)
