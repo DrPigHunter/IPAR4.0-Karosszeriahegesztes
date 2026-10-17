@@ -32,8 +32,9 @@ from src.parameter_audit import build_parameter_audit
 from src import simulator as simulator_module
 from src.report_export import append_application_log, export_production_report, load_all_tables, load_file_logs
 from src.speed_control import (
-    DEFAULT_SPEED_PERCENT, MAX_SPEED_PERCENT, MIN_SPEED_PERCENT,
-    normalize_speed_percent, scaled_inter_body_pause_seconds, scaled_publish_delay_ms,
+    CYCLE_TARGET_SECONDS, DEFAULT_SPEED_PERCENT, DEFAULT_TARGET_CYCLE_SECONDS,
+    MAX_SPEED_PERCENT, MIN_SPEED_PERCENT, base_publish_delay_ms, normalize_speed_percent,
+    scaled_inter_body_pause_seconds, scaled_publish_delay_ms,
 )
 from src.monitor_wait import MonitorCompletionTimeout, wait_for_body_completion
 from src.equipment_state import load_equipment_state, save_equipment_state
@@ -59,7 +60,6 @@ from src.wear_control import (
 )
 
 BETWEEN_BODIES_PAUSE_SECONDS = 10.0
-PUBLISH_DELAY_MS = 90  # milliseconds per weld result; 142 points take about 13 seconds
 
 st.set_page_config(
     page_title="BODYLINE | Ipar 4.0",
@@ -264,9 +264,6 @@ def automatic_production_worker(
                 "tool_change_duration_seconds", DEFAULT_TOOL_CHANGE_DURATION_SECONDS
             ))),
         )
-        publish_delay_ms = scaled_publish_delay_ms(
-            PUBLISH_DELAY_MS, normalize_speed_percent(state.get("speed_percent", DEFAULT_SPEED_PERCENT))
-        )
         speed_percent = normalize_speed_percent(state.get("speed_percent", DEFAULT_SPEED_PERCENT))
         inter_body_pause_seconds = scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent)
         cycle_started = time.monotonic()
@@ -288,6 +285,10 @@ def automatic_production_worker(
                 coolant_outlet_temp_c=coolant_outlet_temp_c,
                 non_wear_defect_probability=non_wear_defect_probability,
             )
+            # Pace the entire model-specific event stream to a nominal 95 s cycle.
+            # The only operator-adjustable timing control is still the speed percentage.
+            base_delay_ms = base_publish_delay_ms(len(events), DEFAULT_TARGET_CYCLE_SECONDS)
+            publish_delay_ms = scaled_publish_delay_ms(base_delay_ms, speed_percent)
             non_wear_defect_count = sum(
                 event.get("simulated_variation") == "BACKGROUND_PROCESS_DEFECT" for event in events
             )
@@ -344,7 +345,7 @@ def automatic_production_worker(
                 "end_to_end_cycle_seconds": elapsed,
                 "monitor_status": monitor_result["status"],
                 "monitor_database_cycle_seconds": monitor_result.get("duration_seconds"),
-                "within_20_second_target": elapsed < 20.0,
+                "within_100_second_target": elapsed < CYCLE_TARGET_SECONDS,
                 "non_wear_defect_probability_percent": round(non_wear_defect_probability * 100.0, 5),
                 "non_wear_defect_points_in_body": int(non_wear_defect_count),
                 "electrode_wear_enabled": wear_enabled,
@@ -1128,9 +1129,9 @@ def render_production_tab() -> None:
     st.progress(progress, text=f"Pontteljesség  {len(seen.intersection(config['expected_weld_ids']))} / {expected}  ·  {progress:.0%}")
     duration_value = current_row.get("duration_seconds") if current_row is not None else None
     if duration_value is not None and pd.notna(duration_value):
-        duration_text = f"Utolsó ciklusidő: {float(duration_value):.2f} mp · cél: 20 mp alatt"
+        duration_text = f"Utolsó ciklusidő: {float(duration_value):.2f} mp · cél: 90–100 mp"
     else:
-        duration_text = "Ciklusidő: feldolgozás alatt · cél: 20 mp alatt"
+        duration_text = "Ciklusidő: feldolgozás alatt · cél: 90–100 mp"
     st.caption(duration_text)
 
     wear_payloads: list[dict[str, Any]] = []
