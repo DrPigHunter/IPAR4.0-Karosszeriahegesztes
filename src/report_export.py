@@ -296,6 +296,7 @@ def _make_tool_change_frame(application_log: pd.DataFrame) -> pd.DataFrame:
         "Időpont", "Csere módja", "Előző eszköz", "Új eszköz", "Eszközcsere sorszáma",
         "Csere előtti kopás (%)", "Teljes karosszéria azonosítója",
         "Karosszéria-intervallum", "Karosszériák az előző csere óta",
+        "Végrehajtás időablaka", "Szimulált csereidő (mp)", "Tervezett szünet (mp)",
         "Az előző eszköz pontjai", "Az előző eszköz sikeres korrekciói",
         "Az előző eszköz sikertelen korrekciói",
     ]
@@ -322,6 +323,9 @@ def _make_tool_change_frame(application_log: pd.DataFrame) -> pd.DataFrame:
                 "Teljes karosszéria azonosítója": details.get("completed_body_id", ""),
                 "Karosszéria-intervallum": details.get("replacement_interval_bodies"),
                 "Karosszériák az előző csere óta": details.get("bodies_since_previous_change"),
+                "Végrehajtás időablaka": details.get("execution_window", ""),
+                "Szimulált csereidő (mp)": details.get("simulated_change_duration_seconds"),
+                "Tervezett szünet (mp)": details.get("scheduled_inter_body_pause_seconds"),
                 "Az előző eszköz pontjai": details.get("tool_weld_points_before_reset"),
                 "Az előző eszköz sikeres korrekciói": details.get("tool_corrected_points_before_reset"),
                 "Az előző eszköz sikertelen korrekciói": details.get("tool_uncorrectable_points_before_reset"),
@@ -380,6 +384,10 @@ def export_production_report(
     auto_correct_wear: bool = True,
     auto_tool_change_enabled: bool = True,
     tool_change_interval_bodies: int = 100,
+    tool_change_duration_seconds: float = 5.0,
+    coolant_flow_l_min: float = 6.0,
+    coolant_inlet_temp_c: float = 20.0,
+    coolant_outlet_temp_c: float = 30.0,
 ) -> tuple[Path, bytes, dict[str, Any]]:
     """Write a dated Excel report to disk and return its bytes for browser download."""
     now = export_timestamp or datetime.now().astimezone()
@@ -408,7 +416,11 @@ def export_production_report(
         {"Beállítás": "Kopás hegesztési pontonként (%)", "Érték": float(wear_per_point_percent)},
         {"Beállítás": "Automatikus önkorrekció", "Érték": bool(auto_correct_wear)},
         {"Beállítás": "Automatikus eszközcsere", "Érték": bool(auto_tool_change_enabled)},
-        {"Beállítás": "Eszközcsere minden X karosszéria után", "Érték": int(tool_change_interval_bodies)},
+        {"Beállítás": "Eszközcsere minden X oldalfalciklus után", "Érték": int(tool_change_interval_bodies)},
+        {"Beállítás": "Szimulált eszközcsere-idő (mp)", "Érték": float(tool_change_duration_seconds)},
+        {"Beállítás": "Hűtővíz-áramlás (l/perc)", "Érték": float(coolant_flow_l_min)},
+        {"Beállítás": "Hűtővíz belépő hőmérséklet (°C)", "Érték": float(coolant_inlet_temp_c)},
+        {"Beállítás": "Hűtővíz kilépő hőmérséklet (°C)", "Érték": float(coolant_outlet_temp_c)},
         {"Beállítás": "Minőségi célérték (%)", "Érték": 95.0},
         {"Beállítás": "Automatika leállt az exportig", "Érték": bool(automatic_worker_stopped)},
         {"Beállítás": "Megjegyzés", "Érték": "A részletes lapok minden elérhető adatbázisrekordot tartalmaznak, nem csak a képernyőn látható legutóbbi sorokat."},
