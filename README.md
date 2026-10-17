@@ -1,24 +1,34 @@
-# Autóipari karosszéria-ponthegesztési folyamat szimulációja MQTT-alapú adatközvetítéssel
+# Autóipari oldalfal-ponthegesztési folyamat szimulációja MQTT-alapú adatközvetítéssel
 
-Szoftveres Ipar 4.0 demonstráció: karosszériák és hegesztési pontok szimulációja, MQTT-alapú adatküldés, élő paraméterellenőrzés és automatikus selejt/utómunka-kezelés.
+Szoftveres Ipar 4.0 demonstráció: tíz különböző járműmodell bal oldalfalának hegesztési szimulációja, modellhez rendelt pontlistával és külön paraméterhatárokkal.
 
-> Oktatási szimuláció. A generált adatok nem valódi gyártási mérések, és a program nem bizonyítja egy fizikai hegesztési kötés tényleges minőségét.
+> Oktatási szimuláció. A GitHubon tárolt Excel-katalógus minden pontja, névleges értéke és határértéke szintetikus; nem valódi Audi/CUPRA/VW/Škoda gyártási specifikáció.
+
+## Excel a referencia-adatforrás
+
+A `config/welding_catalog.xlsx` az egyetlen referencia-konfigurációs forrás:
+
+- **Modellek** lap: 10 járműmodell, mindegyikhez külön `config_id`, bal oldalfal, elvárt pontszám és saját áramerősség-, hegesztésiidő- és elektródaerő-határérték.
+- **Hegesztési pontok** lap: modellenként eltérő pontazonosítók, pontmegnevezések, sorrend és szimulált névleges paraméterek.
+- Az alkalmazás a kiválasztott konfiguráció névleges értékeiből generál adatot, a monitor pedig ugyanannak az Excel-konfigurációnak a határértékeihez méri.
+- A konfigurációkat az SQLite nem helyettesíti és nem generálja: az adatbázis kizárólag mérési eseményeket, futási állapotokat, hibákat és utómunka-naplót tartalmaz.
+
+Példák a modellekre: CUPRA Terramar, Audi Q8, Q5, Q3, Q4 e-tron, A6, A3, Volkswagen Tiguan, ID.4 és Škoda Kodiaq. Ezekhez a projekt demonstrációs, saját pontazonosítókat és eltérő szintetikus paramétereket használ.
 
 ## Funkciók
 
-- Karosszériatípusok és az elvárt hegesztési pontok listája már a folyamat elején rendelkezésre áll.
-- Szimulált áramerősség, hegesztési idő és elektródaerő.
-- Szándékos hibák: hiányzó pont, határértéken kívüli paraméter, duplikált üzenet és váratlan pontazonosító.
-- MQTT publisher, Mosquitto broker és külön subscriber/ellenőrző.
-- Duplikált üzenetek külön eseményként maradnak meg; a hiányzó pontokat a karosszéria lezárásakor ellenőrzi.
-- A nem megfelelő karosszéria automatikusan bekerül az utómunka-sorba.
-- Az utómunka állapota és kezelői megjegyzései is rögzülnek MQTT-n és SQLite-ban.
-- 2 másodpercenként frissülő Streamlit dashboard élő karosszéria-állapottal, ponttérképpel, mért paraméterekkel, eseménytörténettel, hibajegyzékkel és utómunka-listával.
+- Valós időben követhető aktív oldalfal, pontteljességi folyamatjelző és ponttérkép.
+- Minden ponthoz áramerősség (kA), hegesztési idő (ms) és elektródaerő (kN).
+- Hibaszcenáriók: hiányzó pont, határértéken kívüli paraméter, duplikált üzenet, váratlan pontazonosító, hibás vagy ismeretlen esemény.
+- A duplikált esemény megmarad a naplóban, és hibaként jelölődik.
+- A nem megfelelő oldalfal automatikusan az utómunka-sorba kerül.
+- Az utómunka indítása, lezárása, megjegyzései és műveleti naplója követhető a kezelőfelületen.
+- A dashboard 2 másodpercenként frissül; az MQTT monitor külön folyamatban fut.
 
 ## Követelmények
 
 - Python 3.11 vagy újabb
-- Docker Desktop (a Mosquitto MQTT-broker futtatásához)
+- Docker Desktop (Mosquitto MQTT-brokerhez)
 
 ## Indítás Windows alatt
 
@@ -46,30 +56,7 @@ Egy másik ablakban indítsd el a kezelőfelületet:
 streamlit run src/dashboard.py
 ```
 
-A böngészőben elérhető dashboardon indíts egy karosszériát. A ponttérkép és a legutóbbi hegesztési paraméterek automatikusan frissülnek. Ha egy karosszéria bármely ellenőrzésen elbukik, a monitor automatikusan selejtnek jelöli és az utómunka-sorba teszi. A dashboardon az utómunka elindítható és lezárható; a lezárás újraellenőrzést igényel, nem állítja automatikusan megfelelőre a karosszériát.
-
-A szimulátor parancssorból is futtatható:
-
-```powershell
-python -m src.simulator --body-type Sedan --fault-rate 0.05
-```
-
-## Adatút
-
-`Szimulátor / dashboard → MQTT (Mosquitto) → monitor és ellenőrző → SQLite → élő dashboard`
-
-A kezelői utómunka-műveletek szintén a `welding/events` MQTT-témán mennek keresztül.
-
-## Ellenőrzési szabályok
-
-- Az elvárt összes hegesztési pontnak meg kell jelennie.
-- Az áramerősségnek, hegesztési időnek és elektródaerőnek a konfigurált határokon belül kell lennie.
-- A duplikált és váratlan pontazonosítók hibának minősülnek.
-- Hibás vagy nem támogatott MQTT-esemény esetén hibabejegyzés jelenik meg a dashboardon.
-- A nem megfelelő karosszériák automatikusan az utómunka-sorba kerülnek.
-- Utómunka lezárásakor újraellenőrzés szükséges, az eredeti selejtes minősítés nem törlődik automatikusan.
-
-A küszöbértékek demonstrációs célú, szimulált értékek, nem Audi-specifikációk.
+Válassz járműmodellt, ellenőrizd az Excelből beolvasott határértékeket, állíts be hibaarányt, majd indítsd el az oldalfalat. A ponttérkép a hegesztési események fogadásával frissül. A lezáráskor ellenőrzött hibás oldalfal automatikusan selejt állapotot és utómunka-bejegyzést kap.
 
 ## Tesztek
 
@@ -77,8 +64,8 @@ A küszöbértékek demonstrációs célú, szimulált értékek, nem Audi-speci
 python -m unittest discover -s tests -v
 ```
 
-A tesztek a paraméterhatárokat, a hiányzó és duplikált pontokat, a selejt utómunka-sorba helyezését és az utómunka állapotátmeneteit ellenőrzik.
+A tesztek lefedik a katalógus tíz konfigurációját, a modellhez tartozó pontlistát és paraméterhatárokat, a duplikációkat, a hiányzó pontokat, valamint az automatikus utómunka-sorba helyezést és az utómunka állapotátmeneteit.
 
-## Fontos korlát
+## Korlát
 
-A rendszer szimulált folyamatadatokat és üzenetek teljességét ellenőrzi. Valódi hegesztési kötés fizikai minőségének megállapítására önmagában nem alkalmas.
+A rendszer szoftveres demonstráció, a jármű- és technológiai adatok nem gyártói dokumentumból származnak. A modell specifikus paraméterek ellenőrzése sem bizonyítja a fizikai hegesztési kötés szilárdságát.
