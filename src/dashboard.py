@@ -256,18 +256,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Reset the dashboard's statistics window when the Python process or dashboard source changes.
-# This stops historical rejected bodies from appearing as failures in the new run.
-_code_mtime = Path(__file__).stat().st_mtime
-if (
-    st.session_state.get("app_process_id") != os.getpid()
-    or st.session_state.get("app_code_mtime") != _code_mtime
-):
+# Use a fresh statistics window whenever the dashboard process is restarted.
+# Historical records remain in SQLite and the history expander, not in current-run KPIs.
+if st.session_state.get("app_process_id") != os.getpid():
+    old_stop = st.session_state.get("auto_stop_event")
+    if old_stop is not None:
+        old_stop.set()
     st.session_state["app_process_id"] = os.getpid()
-    st.session_state["app_code_mtime"] = _code_mtime
     st.session_state["app_session_started_at"] = time.time()
     st.session_state["app_session_id"] = uuid.uuid4().hex
     st.session_state.pop("auto_state", None)
+    st.session_state.pop("auto_thread", None)
+    st.session_state.pop("auto_stop_event", None)
 if "auto_state" not in st.session_state:
     start_automatic_production()
 
