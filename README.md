@@ -16,33 +16,39 @@ Ipar 4.0 oktatási demonstráció: tíz járműmodell bal oldalfalának ponthege
 
 A webes felület címe: **http://localhost:8501**
 
-A monitor és a dashboard két külön PowerShell-ablakban fut; hagyd nyitva ezeket a szimuláció közben. Az **Élő gyártás** fülön az automatikus gyártás alapértelmezetten elindul. Egy oldalfal hegesztése 90 ms-os pontközzel szimulálódik, és a ciklus célideje 20 másodperc alatt van. Egy ciklus befejezése után a rendszer 10 másodpercet vár, majd automatikusan másik modellt választ. Az automatika a webes felületen leállítható és újraindítható.
+A monitor és a dashboard két külön PowerShell-ablakban fut; hagyd nyitva ezeket a szimuláció közben. Az automatika a kezelőfelület megnyitásakor **leállított állapotban** van: a hibaarány és a sebesség beállítása után az **Élő gyártás** fülön kézzel kell elindítani. 100%-os sebességnél a pontküldések közötti alapvárakozás 90 ms, a karosszériák között 10 másodperc. A kezelőfelületen a sebesség 100–10 000% között állítható, és az új érték a következő karosszériaciklustól érvényes. A rendszer véletlenszerűen választja ki a tíz katalógusmodell egyikét. A 20 másodperces cikluscél mérendő elvárás, nem garantált teljesítmény.
 
 ## Kézi indítás
 
-A projekt gyökérmappájában:
+A projekt gyökérmappájában, ha a virtuális környezet még nem létezik:
 
     py -3 -m venv .venv
     .\.venv\Scripts\Activate.ps1
     python -m pip install --upgrade pip
     pip install -r requirements.txt
+
+Indítsd el a Docker Desktopot, majd:
+
     docker compose up -d mqtt
 
-Egy másik PowerShell-ablakban:
+Egy külön PowerShell-ablakban indítsd el a monitort:
 
     .\.venv\Scripts\Activate.ps1
     python -m src.monitor
 
-Egy harmadik ablakban:
+Egy másik ablakban indítsd a webes kezelőfelületet:
 
     .\.venv\Scripts\Activate.ps1
     streamlit run src/dashboard.py
 
-## Kétfüles felület
+Ezután nyisd meg a http://localhost:8501 címet. Az automatika nem indul el magától.
 
-- **Élő gyártás:** kompakt állapotjelzők, aktuális karosszéria, pontteljesség és színkódolt ponttérkép görgethető, hosszú mérési táblázat nélkül.
-- **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények, mérési napló, hibanapló és utómunka-kezelés.
-- **Automatizálás:** a 10 modellből a rendszer automatikusan választ. Egy hegesztési ciklus után 10 másodpercet vár a következő karosszéria indításáig; 90 ms-os pontköz mellett a 142 pontos oldal célideje 20 másodperc alatt van.
+## Háromfüles felület
+
+- **Élő gyártás:** aktuális karosszéria, pontteljesség és színkódolt ponttérkép, indítás/leállítás és sebességszabályzó 100–10 000% között.
+- **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, hibaarány és hibamód beállítása, karosszéria-előzmények, mérési napló és utómunka-kezelés.
+- **Napló és export:** tartós futás- és alkalmazásnaplók, monitor/dashboard konzolnaplók, dátumozott Excel-jelentés és letöltés.
+- **Automatizálás:** a 10 modellből a rendszer automatikusan választ, de a gyártási ciklus csak a felhasználó indításával kezdődik. A ciklusidő célértéke 20 másodperc alatt; az eredményt minden lezárt ciklusnál mérjük.
 - **Pontonkénti eltérésvalószínűség:** a Statisztika és utómunka fülön 0,000–0,100% között állítható, 0,001 százalékpontos lépésekkel. A 0,000% kikapcsol minden mesterséges eltérést.
 - **Eltérési mód:** választható elfogadott tartományon belüli változtatás (megfelelő marad), vagy a határértéket egy mérési lépéssel átlépő hiba (utómunka).
 - **Utómunka:** a ténylegesen hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont hibának számít, és automatikusan utómunka-sorba kerül.
