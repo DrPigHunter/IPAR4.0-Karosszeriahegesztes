@@ -181,10 +181,12 @@ def publish_events(
 ) -> None:
     """Publish ordered events with QoS 1 acknowledgements checked after enqueueing.
 
-    At 100%, the inter-message pause is the original 90 ms. At higher speeds,
-    waiting for each QoS 1 acknowledgement before publishing the next message
-    would serialize network round trips and defeat speed scaling. Paho keeps
-    its network loop active while messages are queued and acknowledged.
+    The caller controls the inter-message pause. The dashboard computes this
+    from the selected model's event count to target a nominal 95-second cycle;
+    direct calls that omit delay_ms retain the 90 ms API default. At higher
+    speeds, waiting for each QoS 1 acknowledgement before publishing the next
+    message would serialize network round trips and defeat speed scaling. Paho
+    keeps its network loop active while messages are queued and acknowledged.
     """
     if delay_ms < 0:
         raise ValueError("A delay_ms nem lehet negatív.")
