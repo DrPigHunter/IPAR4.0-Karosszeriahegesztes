@@ -1,71 +1,77 @@
-# Autóipari oldalfal-ponthegesztési folyamat szimulációja MQTT-alapú adatközvetítéssel
+# BODYLINE — Autóipari oldalfal-ponthegesztési szimuláció
 
-Szoftveres Ipar 4.0 demonstráció: tíz különböző járműmodell bal oldalfalának hegesztési szimulációja, modellhez rendelt pontlistával és külön paraméterhatárokkal.
+Ipar 4.0 oktatási demonstráció: tíz járműmodell bal oldalfalának ponthegesztése, MQTT-alapú adatközvetítéssel, pont- és paraméterellenőrzéssel, élő felügyelettel és utómunka-nyilvántartással.
 
-> Oktatási szimuláció. A GitHubon tárolt Excel-katalógus minden pontja, névleges értéke és határértéke szintetikus; nem valódi Audi/CUPRA/VW/Škoda gyártási specifikáció.
+> **Fontos:** a katalógus és minden folyamatparaméter szintetikus, demonstrációs adat. Nem valós Audi/CUPRA/Volkswagen/Škoda gyártási specifikáció, és a szoftveres ellenőrzés nem bizonyítja a fizikai hegesztési kötés szilárdságát.
 
-## Excel a referencia-adatforrás
+## Gyors indítás Windows alatt
 
-A `config/welding_catalog.xlsx` a GitHubon tárolt natív Excel-referencia-munkafüzet, két munkalappal. Ez az alkalmazás egyetlen referencia-konfigurációs forrása:
+**Előfeltételek:** Python 3.11 vagy újabb, Docker Desktop WSL 2 támogatással, engedélyezett Virtual Machine Platform.
 
-- **Modellek** lap: 10 járműmodell, mindegyikhez külön `config_id`, bal oldalfal, elvárt pontszám és saját áramerősség-, hegesztésiidő- és elektródaerő-határérték.
-- **Hegesztési pontok** lap: modellenként eltérő pontazonosítók, pontmegnevezések, sorrend és szimulált névleges paraméterek.
-- Az alkalmazás a kiválasztott konfiguráció névleges értékeiből generál adatot, a monitor pedig ugyanannak az Excel-konfigurációnak a határértékeihez méri.
-- A `Modellek` és `Hegesztési pontok` külön munkalapon szerepel. Az SQLite nem helyettesíti és nem generálja a konfigurációkat: kizárólag a mérési eseményeket, futási állapotokat, hibákat és az utómunka naplóját tárolja.
+1. Indítsd el a Docker Desktopot, és várd meg, amíg a Docker Engine készen áll.
+2. A projekt gyökérmappájában futtasd a **Start_HegesztesSzimulacio.ps1** scriptet:
+   - PowerShellből: .\Start_HegesztesSzimulacio.ps1
+   - Ha a Windows letiltja a script futtatását, csak az aktuális PowerShell-ablakra engedélyezheted: Set-ExecutionPolicy -Scope Process Bypass, majd futtasd újra a scriptet.
+3. A script létrehozza a virtuális környezetet, telepíti a Python-csomagokat, elindítja az MQTT-brokert, külön terminálban megnyitja a monitort és a webes felületet, majd megnyitja a böngészőt.
 
-Példák a modellekre: CUPRA Terramar, Audi Q8, Q5, Q3, Q4 e-tron, A6, A3, Volkswagen Tiguan, ID.4 és Škoda Kodiaq. Ezekhez a projekt demonstrációs, saját pontazonosítókat és eltérő szintetikus paramétereket használ.
+A webes felület címe: **http://localhost:8501**
 
-## Funkciók
+A monitor és a dashboard két külön PowerShell-ablakban fut; hagyd nyitva ezeket a szimuláció közben. Az **Élő gyártás** fülön az automatikus gyártás alapértelmezetten elindul. Ötmásodpercenként új oldalfal indul, a modell automatikusan változik. Az automatika a webes felületen leállítható és újraindítható.
 
-- Valós időben követhető aktív oldalfal, pontteljességi folyamatjelző és ponttérkép.
-- Minden ponthoz áramerősség (kA), hegesztési idő (ms) és elektródaerő (kN).
-- Hibaszcenáriók: hiányzó pont, határértéken kívüli paraméter, duplikált üzenet, váratlan pontazonosító, hibás vagy ismeretlen esemény.
-- A duplikált esemény megmarad a naplóban, és hibaként jelölődik.
-- A nem megfelelő oldalfal automatikusan az utómunka-sorba kerül.
-- Az utómunka indítása, lezárása, megjegyzései és műveleti naplója követhető a kezelőfelületen.
-- A dashboard 2 másodpercenként frissül; az MQTT monitor külön folyamatban fut.
+## Kézi indítás
 
-## Követelmények
+A projekt gyökérmappájában:
 
-- Python 3.11 vagy újabb
-- Docker Desktop (Mosquitto MQTT-brokerhez)
+    py -3 -m venv .venv
+    .\.venv\Scripts\Activate.ps1
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    docker compose up -d mqtt
 
-## Indítás Windows alatt
+Egy másik PowerShell-ablakban:
 
-PowerShellben, a projekt gyökérmappájában:
+    .\.venv\Scripts\Activate.ps1
+    python -m src.monitor
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-docker compose up -d mqtt
-```
+Egy harmadik ablakban:
 
-Egy külön PowerShell ablakban indítsd el az adatfogadót és ellenőrzőt:
+    .\.venv\Scripts\Activate.ps1
+    streamlit run src/dashboard.py
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m src.monitor
-```
+## Kétfüles felület
 
-Egy másik ablakban indítsd el a kezelőfelületet:
+- **Élő gyártás:** kompakt állapotjelzők, aktuális karosszéria, pontteljesség és színkódolt ponttérkép görgethető, hosszú mérési táblázat nélkül.
+- **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények, mérési napló, hibanapló és utómunka-kezelés.
+- **Automatizálás:** a 10 modellből a rendszer automatikusan választ; új karosszériát 5 másodperces indítási időközzel küld a szimulációba.
+- **Hibavalószínűség:** alapértelmezetten alacsony (0,0001). A statisztika fülön demonstrációs célra állítható.
+- **Utómunka:** a hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont továbbra is hibának számít, és automatikusan utómunka-sorba kerül.
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-streamlit run src/dashboard.py
-```
+## Excel-katalógus
 
-Válassz járműmodellt, ellenőrizd az Excelből beolvasott határértékeket, állíts be hibaarányt, majd indítsd el az oldalfalat. A ponttérkép a hegesztési események fogadásával frissül. A lezáráskor ellenőrzött hibás oldalfal automatikusan selejt állapotot és utómunka-bejegyzést kap.
+A config/welding_catalog.xlsx az alkalmazás referencia-konfigurációja, két munkalappal:
 
-## Tesztek
+- **Modellek:** konfigurációk, elvárt pontszámok és modellfüggő szintetikus határértékek.
+- **Hegesztési pontok:** minden ponthoz egyedi azonosító, sorrend, megnevezés és szimulált névleges paraméterek.
 
-```powershell
-python -m unittest discover -s tests -v
-```
+| Járműmodell | Bal oldalfal hegesztési pontjai |
+|---|---:|
+| CUPRA Terramar | 118 |
+| Audi Q8 | 124 |
+| Audi Q5 | 130 |
+| Audi Q3 | 136 |
+| Audi Q4 e-tron | 142 |
+| Audi A6 | 115 |
+| Audi A3 | 121 |
+| Volkswagen Tiguan | 127 |
+| Volkswagen ID.4 | 133 |
+| Škoda Kodiaq | 139 |
 
-A tesztek lefedik a katalógus tíz konfigurációját, a modellhez tartozó pontlistát és paraméterhatárokat, a duplikációkat, a hiányzó pontokat, valamint az automatikus utómunka-sorba helyezést és az utómunka állapotátmeneteit.
+Minden modellen 100–150 közötti hegesztési pont szerepel. A tools/generate_catalog.py reprodukálhatóan újra tudja készíteni a munkafüzetet; a GitHub Actions a generátor módosításakor frissíti a verziózott XLSX-et.
 
-## Korlát
+Az SQLite kizárólag futási adatokat tárol: mérési eseményeket, karosszériaállapotokat, feldolgozási hibákat és utómunka-naplót. Nem helyettesíti az Excel-referenciakatalógust.
 
-A rendszer szoftveres demonstráció, a jármű- és technológiai adatok nem gyártói dokumentumból származnak. A modell specifikus paraméterek ellenőrzése sem bizonyítja a fizikai hegesztési kötés szilárdságát.
+## Tesztek futtatása
+
+    python -m unittest discover -s tests -v
+
+A tesztek ellenőrzik a katalógus szerkezetét és pontszámait, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, valamint az automatikus utómunka-kezelést.
