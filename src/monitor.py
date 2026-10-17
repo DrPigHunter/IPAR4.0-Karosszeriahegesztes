@@ -16,6 +16,7 @@ from src.rules import evaluate_body, validate_event
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "welding.db"
+LOG_DIR = ROOT / "logs"
 BROKER_HOST, BROKER_PORT, TOPIC = "127.0.0.1", 1883, "welding/events"
 
 REWORK_WAITING = "UTÓMUNKÁRA VÁR"
@@ -37,7 +38,8 @@ def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
         status TEXT NOT NULL DEFAULT 'FOLYAMATBAN', missing_ids_json TEXT NOT NULL DEFAULT '[]',
         unexpected_ids_json TEXT NOT NULL DEFAULT '[]', duplicate_ids_json TEXT NOT NULL DEFAULT '[]',
         parameter_errors INTEGER NOT NULL DEFAULT 0, event_count INTEGER NOT NULL DEFAULT 0,
-        started_at TEXT NOT NULL, completed_at TEXT, latency_ms REAL
+        started_at TEXT NOT NULL, started_received_at REAL, completed_at TEXT, latency_ms REAL,
+        duration_seconds REAL
       );
       CREATE TABLE IF NOT EXISTS weld_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT, body_id TEXT NOT NULL, config_id TEXT NOT NULL DEFAULT '',
@@ -64,6 +66,8 @@ def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
         ("bodies", "config_id", "TEXT NOT NULL DEFAULT ''"),
         ("weld_events", "config_id", "TEXT NOT NULL DEFAULT ''"),
         ("bodies", "unexpected_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("bodies", "started_received_at", "REAL"),
+        ("bodies", "duration_seconds", "REAL"),
     ):
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in columns:
@@ -122,7 +126,8 @@ def _resolve_config(conn: sqlite3.Connection, event: dict[str, Any], body_id: st
 
 
 def process_event(
-    conn: sqlite3.Connection, event: dict[str, Any], received_at: float | None = None
+    conn: sqlite3.Connection, event: dict[str, Any], received_at: float | None = None,
+    log_dir: str | Path | None = None,
 ) -> None:
     """Process one MQTT event. Parameter limits and required points always come from the XLSX catalog."""
     received_at = time.time() if received_at is None else received_at
@@ -143,6 +148,10 @@ def process_event(
             return
         config_id, config = resolved
         _ensure_body(conn, body_id, config_id, config, timestamp)
+        conn.execute(
+            "UPDATE bodies SET started_received_at=COALESCE(started_received_at, ?) WHERE body_id=?",
+            (received_at, body_id),
+        )
         conn.commit()
         return
 
@@ -206,6 +215,14 @@ def process_event(
             for row in rows
         )
         result = evaluate_body(expected_ids, received_ids, parameter_errors)
+        start_row = conn.execute(
+            "SELECT started_received_at FROM bodies WHERE body_id=?", (body_id,)
+        ).fetchone()
+        started_received_at = start_row["started_received_at"] if start_row else None
+        duration_seconds = (
+            round(max(0.0, received_at - float(started_received_at)), 3)
+            if started_received_at is not None else None
+        )
         try:
             sent_epoch = datetime.fromisoformat(timestamp).timestamp()
             latency_ms = max(0.0, (received_at - sent_epoch) * 1000.0)
@@ -216,11 +233,11 @@ def process_event(
         final_status = "SELEJT / UTÓMUNKÁRA KÜLDVE" if bad else "MEGFELELŐ"
         conn.execute(
             """UPDATE bodies SET status=?,missing_ids_json=?,unexpected_ids_json=?,duplicate_ids_json=?,
-               parameter_errors=?,completed_at=?,latency_ms=? WHERE body_id=?""",
+               parameter_errors=?,completed_at=?,latency_ms=?,duration_seconds=? WHERE body_id=?""",
             (final_status, json.dumps(result["missing_ids"], ensure_ascii=False),
              json.dumps(result["unexpected_ids"], ensure_ascii=False),
              json.dumps(result["duplicate_ids"], ensure_ascii=False), parameter_errors,
-             timestamp, latency_ms, body_id),
+             timestamp, latency_ms, duration_seconds, body_id),
         )
         if bad:
             reason_parts: list[str] = []
@@ -239,6 +256,16 @@ def process_event(
                 (body_id, reason, REWORK_WAITING, timestamp, timestamp),
             )
         conn.commit()
+        if log_dir is not None:
+            try:
+                from src.run_logger import write_run_log
+                path = write_run_log(
+                    conn, body_id, config, expected_ids, received_ids, result,
+                    parameter_errors, duration_seconds, log_dir,
+                )
+                print(f"Futásstatisztika elmentve: {path}")
+            except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+                print(f"FIGYELEM: a futásnapló mentése nem sikerült: {exc}")
         return
 
     if event_type == "rework_action":
@@ -292,7 +319,7 @@ def main() -> None:
     def on_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage) -> None:
         raw = message.payload.decode("utf-8", errors="replace")
         try:
-            process_event(conn, json.loads(raw))
+            process_event(conn, json.loads(raw), log_dir=LOG_DIR)
         except (sqlite3.Error, TypeError, ValueError, KeyError) as exc:
             print(f"Üzenetfeldolgozási hiba: {exc}")
             try:
