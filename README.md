@@ -78,6 +78,12 @@ Minden lezárt karosszériaciklusról a monitor külön JSON-fájlt ment a `logs
 
 Az összesítő adatbázisból számol, így tartalmazhat korábbi verziókból származó futásokat is. A dashboard fő statisztikái az aktuális böngésző-munkamenet új ciklusait külön számolják, a korábbi futások pedig az előzményekben maradnak.
 
+## Állítható szimulációs sebesség
+
+Az **Élő gyártás** fülön, az indítás/leállítás gomb mellett állítható a szimuláció sebessége **100% és 10 000%** között, 100%-os lépésekkel. Alapértéke 100%, ami pontosan a korábbi beállításokat jelenti: 90 ms késleltetés hegesztési eseményenként és 10 másodperc szünet két karosszéria között. 10 000%-nál ezek az ütemezett várakozások 0,9 ms-ra, illetve 0,1 másodpercre csökkennek. A kiválasztott érték a következő karosszéria-ciklustól lép életbe, és az alkalmazásnaplóban, valamint az Excel-jelentésben is rögzül.
+
+A 10 000% a szimulátor késleltetéseinek skálázását jelenti, nem garantál százszoros tényleges áteresztőképességet: a tényleges ciklusidőt az MQTT QoS 1 visszaigazolásai, a gép teljesítménye, az operációs rendszer és az adatbázis-feldolgozás is korlátozza. A 20 másodperces célértéket minden ciklusnál továbbra is ténylegesen mérjük.
+
 ## Kijelentkezés, Excel-értékelés és teljes napló
 
 A dashboard jobb felső **Kijelentkezés + Excel** gombja dátum- és időbélyeggel ellátott XLSX-jelentést készít a `logs/exports` mappába, és letölthetővé teszi a böngészőben. Az export létrehozása **nem függ attól, hogy az automatika magától leáll-e**: a program először elmenti az aktuális állapotot, majd megkísérli a gyártási szál rendezett leállítását, és frissíti a munkafüzetet, ha újabb adatok érkeztek.
