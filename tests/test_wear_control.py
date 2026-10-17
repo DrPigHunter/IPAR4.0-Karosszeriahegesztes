@@ -7,7 +7,15 @@ from pathlib import Path
 from src.catalog import list_configurations
 from src.monitor import connect_db, process_event
 from src.simulator import generate_body_events
-from src.wear_control import QUALITY_TARGET_PERCENT, apply_electrode_wear
+from src.wear_control import (
+    DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    QUALITY_TARGET_PERCENT,
+    apply_electrode_wear,
+    ensure_wear_state,
+    register_completed_body_for_tool,
+    replace_electrode_tool,
+    replace_tool_if_due,
+)
 
 CONFIG = list_configurations()[0]
 
@@ -112,6 +120,88 @@ class ElectrodeWearTests(unittest.TestCase):
                 self.assertIn("Elektródakopás", rework["reason"])
             finally:
                 conn.close()
+
+    def test_automatic_tool_replacement_after_configured_number_of_completed_bodies(self):
+        state = ensure_wear_state({
+            "wear_percent": 37.5,
+            "total_weld_points": 300,
+            "tool_weld_points": 60,
+            "tool_corrected_points": 9,
+        })
+        self.assertEqual(DEFAULT_TOOL_CHANGE_INTERVAL_BODIES, 100)
+
+        for body_number in (1, 2):
+            change = register_completed_body_for_tool(
+                state, interval_bodies=3, enabled=True, body_id=f"BODY-{body_number}"
+            )
+            self.assertIsNone(change)
+            self.assertEqual(state["current_tool_number"], 1)
+
+        change = register_completed_body_for_tool(
+            state, interval_bodies=3, enabled=True, body_id="BODY-3"
+        )
+        self.assertIsNotNone(change)
+        self.assertEqual(change["change_mode"], "AUTO")
+        self.assertEqual(change["previous_tool_number"], 1)
+        self.assertEqual(change["new_tool_number"], 2)
+        self.assertEqual(change["tool_change_number"], 1)
+        self.assertEqual(change["bodies_since_previous_change"], 3)
+        self.assertAlmostEqual(change["wear_percent_before_reset"], 37.5)
+        self.assertEqual(state["wear_percent"], 0.0)
+        self.assertEqual(state["current_tool_number"], 2)
+        self.assertEqual(state["tool_change_count"], 1)
+        self.assertEqual(state["bodies_since_tool_change"], 0)
+        self.assertEqual(state["tool_weld_points"], 0)
+        self.assertEqual(state["tool_corrected_points"], 0)
+        # Lifetime metrics remain available; only counters for the replaced tool reset.
+        self.assertEqual(state["total_weld_points"], 300)
+
+    def test_disabled_auto_replacement_can_be_enabled_after_tool_life_limit(self):
+        state = ensure_wear_state({"wear_percent": 12.0})
+        for body_number in range(1, 4):
+            change = register_completed_body_for_tool(
+                state, interval_bodies=3, enabled=False, body_id=f"BODY-{body_number}"
+            )
+            self.assertIsNone(change)
+        self.assertEqual(state["bodies_since_tool_change"], 3)
+        self.assertEqual(state["current_tool_number"], 1)
+
+        change = replace_tool_if_due(
+            state, interval_bodies=3, enabled=True, body_id="BODY-3"
+        )
+        self.assertIsNotNone(change)
+        self.assertEqual(change["change_mode"], "AUTO")
+        self.assertEqual(state["wear_percent"], 0.0)
+        self.assertEqual(state["current_tool_number"], 2)
+        self.assertEqual(state["bodies_since_tool_change"], 0)
+
+    def test_manual_tool_replacement_resets_current_wear_but_preserves_lifetime_counts(self):
+        state = ensure_wear_state({
+            "wear_percent": 55.0,
+            "total_weld_points": 900,
+            "corrected_points": 120,
+            "bodies_since_tool_change": 8,
+            "tool_weld_points": 240,
+            "tool_corrected_points": 30,
+        })
+        change = replace_electrode_tool(state, reason="MANUAL", body_id="BODY-LAST")
+        self.assertEqual(change["change_mode"], "MANUAL")
+        self.assertEqual(change["completed_body_id"], "BODY-LAST")
+        self.assertEqual(change["wear_percent_before_reset"], 55.0)
+        self.assertEqual(state["wear_percent"], 0.0)
+        self.assertEqual(state["current_tool_number"], 2)
+        self.assertEqual(state["bodies_since_tool_change"], 0)
+        self.assertEqual(state["total_weld_points"], 900)
+        self.assertEqual(state["corrected_points"], 120)
+        self.assertEqual(state["tool_weld_points"], 0)
+        self.assertEqual(state["tool_corrected_points"], 0)
+
+    def test_tool_change_interval_validation(self):
+        state = ensure_wear_state({})
+        with self.assertRaises(ValueError):
+            register_completed_body_for_tool(state, interval_bodies=0)
+        with self.assertRaises(ValueError):
+            replace_tool_if_due(state, interval_bodies=10_001)
 
     def test_wear_rate_validation(self):
         state = {}
