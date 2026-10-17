@@ -843,6 +843,10 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
     auto_correct_wear = bool(state.get("auto_correct_wear", True))
     auto_tool_change_enabled = bool(state.get("auto_tool_change_enabled", True))
     tool_change_interval_bodies = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
+    tool_change_duration_seconds = float(state.get("tool_change_duration_seconds", DEFAULT_TOOL_CHANGE_DURATION_SECONDS))
+    coolant_flow_l_min = float(state.get("coolant_flow_l_min", COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN))
+    coolant_inlet_temp_c = float(state.get("coolant_inlet_temp_c", COOLANT_INLET_TARGET_MAX_C))
+    coolant_outlet_temp_c = float(state.get("coolant_outlet_temp_c", COOLANT_OUTLET_TARGET_MAX_C))
     session_started_at = st.session_state.get("app_session_started_at")
     export_time = datetime.now().astimezone()
 
@@ -856,6 +860,10 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
             "auto_correct_wear": auto_correct_wear,
             "auto_tool_change_enabled": auto_tool_change_enabled,
             "tool_change_interval_bodies": tool_change_interval_bodies,
+            "tool_change_duration_seconds": tool_change_duration_seconds,
+            "coolant_flow_l_min": coolant_flow_l_min,
+            "coolant_inlet_temp_c": coolant_inlet_temp_c,
+            "coolant_outlet_temp_c": coolant_outlet_temp_c,
             "worker_was_alive": bool(worker is not None and worker.is_alive()),
         })
         if stop_event is not None:
@@ -879,6 +887,14 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
         auto_correct_wear=auto_correct_wear,
         auto_tool_change_enabled=auto_tool_change_enabled,
         tool_change_interval_bodies=tool_change_interval_bodies,
+
+        tool_change_duration_seconds=tool_change_duration_seconds,
+
+        coolant_flow_l_min=coolant_flow_l_min,
+
+        coolant_inlet_temp_c=coolant_inlet_temp_c,
+
+        coolant_outlet_temp_c=coolant_outlet_temp_c,
         db_path=DB_PATH,
         log_dir=ROOT / "logs",
         export_timestamp=export_time,
@@ -921,6 +937,14 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
             auto_correct_wear=auto_correct_wear,
             auto_tool_change_enabled=auto_tool_change_enabled,
             tool_change_interval_bodies=tool_change_interval_bodies,
+
+            tool_change_duration_seconds=tool_change_duration_seconds,
+
+            coolant_flow_l_min=coolant_flow_l_min,
+
+            coolant_inlet_temp_c=coolant_inlet_temp_c,
+
+            coolant_outlet_temp_c=coolant_outlet_temp_c,
             db_path=DB_PATH,
             log_dir=ROOT / "logs",
             export_timestamp=export_time,
