@@ -28,6 +28,7 @@ from src.monitor import (
     BROKER_HOST, BROKER_PORT, DB_PATH, REWORK_DONE,
     REWORK_IN_PROGRESS, REWORK_WAITING, TOPIC,
 )
+from src.parameter_audit import build_parameter_audit
 from src import simulator as simulator_module
 from src.report_export import append_application_log, export_production_report, load_all_tables, load_file_logs
 from src.speed_control import (
@@ -1440,6 +1441,25 @@ def render_statistics_tab() -> None:
     # This control panel must remain visible even before the first body exists.
     render_fault_controls()
     render_wear_controls()
+    with st.expander("Hegesztési recept – műszaki referencia-ellenőrzés", expanded=False):
+        audit_rows = build_parameter_audit(CATALOG)
+        audit_frame = pd.DataFrame(audit_rows)
+        flagged = int(audit_frame["Referencia-ellenőrzés"].eq("FELÜLVIZSGÁLAT").sum()) if not audit_frame.empty else 0
+        st.caption(
+            "Ez széles, irodalmi referenciaértékeken alapuló plausibilitási szűrő, nem OEM-hegesztési recept "
+            "vagy kötésminőségi tanúsítás. Az anyag, lemezvastagság, bevonat, illesztés és pisztoly adatai nélkül "
+            "a katalógus értékei nem minősíthetők valódi gyártási receptnek."
+        )
+        if flagged:
+            st.warning(f"{flagged} konfiguráció további műszaki felülvizsgálatot igényel.")
+        else:
+            st.info("A katalógus átment a széles tartományú szűrőn; ez önmagában nem igazolja a receptet.")
+        st.dataframe(audit_frame, use_container_width=True, hide_index=True)
+        st.markdown(
+            "Források: [European Aluminium – Resistance Welding](https://european-aluminium.eu/wp-content/uploads/2022/11/5-resistance-welding_2015.pdf) · "
+            "[Welding in the World – változó elektródaerő vizsgálata](https://link.springer.com/article/10.1007/s40194-020-01001-2) · "
+            "[TWI – elektródakopás és karbantartás](https://www.twi-global.com/technical-knowledge/faqs/faq-how-can-i-minimise-electrode-wear-in-resistance-spot-welding)"
+        )
     if bodies.empty:
         st.info("Az adatbázis még nem kapott karosszéria-eseményt. Ellenőrizd a Docker MQTT-brokert és a python -m src.monitor folyamatot.")
         return
