@@ -12,6 +12,7 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from src.catalog import get_configuration, list_configurations
+from src.wear_control import apply_electrode_wear
 
 BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
@@ -64,6 +65,10 @@ def generate_body_events(
     fault_rate: float = 0.0,
     seed: int | None = None,
     fault_mode: str = "within_limits",
+    wear_state: dict[str, Any] | None = None,
+    wear_per_point_percent: float = 0.03,
+    wear_enabled: bool = False,
+    auto_correct_wear: bool = True,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Generate a complete cycle; fault_rate is a probability per individual weld point.
 
@@ -113,6 +118,17 @@ def generate_body_events(
         **common, "event_type": "body_complete", "expected_weld_ids": expected_ids,
         "expected_count": len(expected_ids), "timestamp": utc_now(),
     })
+    # Keep the wear subsystem optional for callers that use the original simulator
+    # API. The dashboard passes a shared state dictionary to accumulate wear per run.
+    if wear_enabled or wear_state is not None:
+        events[-1]["electrode_wear_summary"] = apply_electrode_wear(
+            events,
+            config,
+            wear_state,
+            wear_per_point_percent=wear_per_point_percent,
+            wear_enabled=wear_enabled,
+            auto_correct=auto_correct_wear,
+        )
     return body_id, events
 
 
