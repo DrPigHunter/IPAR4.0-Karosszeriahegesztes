@@ -49,7 +49,7 @@ Ezután nyisd meg a http://localhost:8501 címet. Az automatika nem indul el mag
 - **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények, mérési napló és utómunka-kezelés. A folyamatparaméterek nem módosíthatók a felületen.
 - **Napló és export:** tartós futás- és alkalmazásnaplók, monitor/dashboard konzolnaplók, dátumozott Excel-jelentés és letöltés.
 - **Automatizálás:** a 10 modellből a rendszer automatikusan választ, de a gyártási ciklus csak a felhasználó indításával kezdődik. A ciklusidő célértéke 20 másodperc alatt; az eredményt minden lezárt ciklusnál mérjük.
-- **Folyamatparaméterek:** a mesterséges hibainjektálás alapértéke 0%, a kopásmodell, önkorrekció, hűtés és automatikus hegesztőfej-/elektródaegység-csere kódalapú gyári beállítással működik. A módosításokat kizárólag a `src/factory_settings.py` fájlban kell elvégezni.
+- **Folyamatparaméterek:** a külön teszthiba-injektálás alapértéke 0%, de a kopástól független háttérhiba-valószínűség 0,01% hegesztési pontonként (1:10 000). 118–142 pontos oldalfalon ez matematikailag kb. 1,17–1,41% esélyt jelent legalább egy ilyen eseményre. A szám a projekt szimulációs feltételezése, nem mért ipari hibaarány. A kopásmodell, önkorrekció, hűtés és hegesztőfej-/elektródaegység-csere kódalapú beállítások; kizárólag a `src/factory_settings.py` fájlban módosíthatók.
 - **Utómunka:** a ténylegesen hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont hibának számít, és automatikusan utómunka-sorba kerül.
 - **Statisztika:** az aktuális dashboard-folyamat új futásait külön számolja; a korábbi futások megmaradnak az előzményekben, így régi selejtek nem torzítják az új menet mérőszámait.
 
@@ -118,7 +118,7 @@ Az Excel-export külön `Kopás és önkorrekció`, `Eszközcsere-napló`, `Para
 
 **Műszaki korlátozás:** az áramlépés/önkorrekció, kopásráta, csereintervallum, csereidő és a 95%-os minőségi proxy demonstrációs paraméterek, nem hitelesített gyári receptértékek. A hűtés alapértékei a TWI bevonatos/vastagabb acélhoz adott referenciaértékei (6 l/perc, max. 20 °C belépő és 30 °C kilépő), de más anyag-/pisztoly-/hűtőrendszer esetén ezeket az adott berendezés specifikációja szerint kell beállítani. A dashboard referencia-auditja csak széles plausibilitási szűrő; nem helyettesít anyag- és illesztésspecifikus hegesztési tartományvizsgálatot.
 
-Források és részletes felülvizsgálat: [Paraméter-realizmus audit](docs/parameter_realism_audit.md), [Elektródakopás és eszközcsere dokumentáció](docs/electrode_wear.md).
+A kopástól független hibamódok forrásai: [TWI – hegesztési minőség és folyamatváltozók](https://www.twi-global.com/technical-knowledge/faqs/faq-what-must-be-done-to-ensure-the-quality-and-consistency-of-resistance-spot-welds) és [ISIJ International – ponthegesztési hibák vizsgálata](https://www.jstage.jst.go.jp/article/isijinternational/54/8/54_1883/_html/-char/en). Források és részletes felülvizsgálat: [Paraméter-realizmus audit](docs/parameter_realism_audit.md), [Elektródakopás és eszközcsere dokumentáció](docs/electrode_wear.md).
 
 ## Tesztek futtatása
 
