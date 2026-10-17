@@ -260,7 +260,8 @@ def export_production_report(
 ) -> tuple[Path, bytes, dict[str, Any]]:
     """Write a dated Excel report to disk and return its bytes for browser download."""
     now = export_timestamp or datetime.now().astimezone()
-    stamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+    # Include microseconds so two exports in the same second never overwrite one another.
+    stamp = now.strftime("%Y-%m-%d_%H-%M-%S_%f")
     root = Path(log_dir)
     export_dir = root / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
