@@ -106,6 +106,9 @@ class ReportExportTests(unittest.TestCase):
         self.assertIn("test_operator_action", set(logs["event"]))
         run_logs = pd.read_excel(BytesIO(data), sheet_name="Futásnaplók")
         self.assertIn("body_id", run_logs.columns)
+        sources = pd.read_excel(BytesIO(data), sheet_name="Források")
+        self.assertTrue(sources["URL"].str.contains("twi-global.com").any())
+        self.assertTrue(sources["URL"].str.contains("springer.com").any())
         workbook.close()
 
     def test_electrode_wear_summary_and_settings_are_exported(self):
