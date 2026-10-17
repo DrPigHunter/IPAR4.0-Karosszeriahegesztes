@@ -102,17 +102,18 @@ def replace_tool_if_due(
     *,
     enabled: bool = True,
     body_id: str | None = None,
+    reason: str = "AUTO_DURING_BREAK",
 ) -> dict[str, Any] | None:
-    """Replace before the next cycle if the configured body-life limit is already met."""
-    interval = _validate_tool_change_interval(interval_bodies)
+    """Execute a scheduled replacement at a break or another known downtime window."""
+    _validate_tool_change_interval(interval_bodies)
     state = ensure_wear_state(wear_state)
     if enabled and (
         bool(state.get("tool_change_pending"))
-        or int(state["bodies_since_tool_change"]) >= interval
+        or int(state["bodies_since_tool_change"]) >= interval_bodies
     ):
         return replace_electrode_tool(
             state,
-            reason="AUTO_DURING_BREAK",
+            reason=reason,
             body_id=body_id or str(state.get("pending_tool_change_body_id") or ""),
         )
     return None
