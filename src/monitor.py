@@ -166,6 +166,11 @@ def process_event(
             return
         _ensure_body(conn, body_id, config_id, config, timestamp)
         errors = validate_event(event, limits=config["limits"])
+        if event.get("process_quality_ok") is False:
+            errors.append(
+                "Elektródakopás miatti minőségi eltérés: az automatikus korrekció nem érte el a "
+                "szimulált célértéket a megengedett határokon belül."
+            )
         if weld_id not in config["expected_weld_ids"]:
             errors.append("Váratlan hegesztési pont: nem szerepel a GitHubon verziózott Excel-katalógus pontlistájában.")
         exists = conn.execute(
