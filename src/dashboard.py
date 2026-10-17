@@ -216,10 +216,15 @@ def automatic_production_worker(
                     f"Részlet: {detail}"
                 )
             state["error"] = detail
-            if isinstance(exc, MonitorCompletionTimeout):
-                # A broker can accept messages while the consumer is stuck. Stop
-                # rather than flooding a monitor that has not finalized this body.
-                stop_event.set()
+            # Fail safe on any generation, publishing, or monitor-finalization error.
+            # A retry loop at 10,000% could otherwise spam MQTT and leave many partial bodies.
+            stop_event.set()
+            safe_application_log("automatic_production_halted_after_error", {
+                "body_id": body_id,
+                "config_id": config_id,
+                "error": detail,
+                "speed_percent": speed_percent,
+            }, level="ERROR")
             safe_application_log("body_cycle_failed", {
                 "body_id": body_id,
                 "config_id": config_id,
