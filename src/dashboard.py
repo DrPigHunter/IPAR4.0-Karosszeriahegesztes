@@ -434,9 +434,9 @@ def render_statistics_tab() -> None:
             st.dataframe(status_counts, use_container_width=True, hide_index=True, height=260)
         fault_rate = st.slider(
             "Mesterséges hibák valószínűsége",
-            min_value=0.0, max_value=0.01, value=float(st.session_state["auto_state"].get("fault_rate", DEFAULT_FAULT_RATE)),
-            step=0.0001, format="%.4f", key="fault_rate_control",
-            help="Alapérték 0,0000: nincs mesterséges hibainjektálás. Csak a következő karosszériákra érvényes tesztbeállítás.",
+            min_value=0.0, max_value=0.00025, value=0.0,
+            step=0.000025, format="%.5f", key="fault_rate_control_v2",
+            help="Alapérték 0,00000: nincs mesterséges hibainjektálás. A tesztcsúszka felső határa is alacsony, így nem ugrik fel tömegesen az utómunka-arány.",
         )
         st.session_state["auto_state"]["fault_rate"] = fault_rate
 
