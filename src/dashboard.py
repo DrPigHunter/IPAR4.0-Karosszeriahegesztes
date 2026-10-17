@@ -42,7 +42,7 @@ else:
     c1,c2,c3,c4 = st.columns(4); c1.metric("Karosszériák",len(bodies)); c2.metric("Lezárt futások",len(completed)); c3.metric("Ellenőrizendő / selejt",len(bad)); c4.metric("Legutóbbi események",len(events))
     st.subheader("Karosszériák állapota")
     display=bodies.copy(); display["Hiányzó pontok"]=display["missing_ids_json"].apply(lambda x:", ".join(json.loads(x or "[]"))); display["Duplikált pontok"]=display["duplicate_ids_json"].apply(lambda x:", ".join(json.loads(x or "[]")))
-    st.dataframe(display[["body_id","body_type","expected_count","event_count","status","parameter_errors","Hiányzó pontok","Duplikált pontok","started_at"]],use_container_width=True,hide_index=True)
+    st.dataframe(display[["body_id","body_type","expected_count","event_count","status","parameter_errors","latency_ms","Hiányzó pontok","Duplikált pontok","started_at"]],use_container_width=True,hide_index=True)
     if not bad.empty: st.subheader("Ellenőrzendő karosszériák"); st.dataframe(bad[["body_id","body_type","status","missing_ids_json","duplicate_ids_json","parameter_errors"]],use_container_width=True,hide_index=True)
     st.subheader("Legutóbbi hegesztési események")
     if not events.empty: st.dataframe(events[["body_id","weld_id","current_ka","weld_time_ms","electrode_force_kn","duplicate","errors_json","timestamp"]],use_container_width=True,hide_index=True)
