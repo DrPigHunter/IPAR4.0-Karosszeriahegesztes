@@ -83,6 +83,7 @@ A GitHubon tárolt, két munkalapos Excel-munkafüzet tíz modell–alkatrész k
 | T12 | Két jelentés ugyanabban a másodpercben | A fájlnevek nem írják felül egymást |
 | T13 | A monitor késve véglegesíti a karosszériát | Az automatika vár a DB-státuszra, időtúllépéskor biztonságosan leáll |
 | T14 | Túlméretes Excel-adattábla | Több számozott munkalap; minden sor megőrizve |
+| T15 | Valódi Mosquitto + monitor + SQLite | Jó ciklus MEGFELELŐ; határérték-hiba selejt/utómunka-sorba kerül |
 
 Futtatás:
 
