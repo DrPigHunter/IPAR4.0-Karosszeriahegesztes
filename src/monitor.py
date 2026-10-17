@@ -1,4 +1,4 @@
-"""MQTT monitor: validate welding events, persist them, and route rejects to rework."""
+"""MQTT subscriber: validates events against the version-controlled Excel catalog and records run history."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,7 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
+from src.catalog import CatalogError, get_configuration
 from src.rules import evaluate_body, validate_event
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +24,7 @@ REWORK_DONE = "UTÓMUNKA ELVÉGEZVE – ÚJRAELLENŐRZÉS SZÜKSÉGES"
 
 
 def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
-    """Open the application database; accepting a path makes integration tests isolated."""
+    """Runtime DB stores observations, run history, and rework only—not reference recipes."""
     target = Path(db_path) if db_path is not None else DB_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(target), timeout=10, check_same_thread=False)
@@ -31,18 +32,18 @@ def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript("""
       CREATE TABLE IF NOT EXISTS bodies (
-        body_id TEXT PRIMARY KEY, body_type TEXT NOT NULL, expected_count INTEGER NOT NULL DEFAULT 0,
-        expected_ids_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'FOLYAMATBAN',
-        missing_ids_json TEXT NOT NULL DEFAULT '[]', unexpected_ids_json TEXT NOT NULL DEFAULT '[]',
-        duplicate_ids_json TEXT NOT NULL DEFAULT '[]', parameter_errors INTEGER NOT NULL DEFAULT 0,
-        event_count INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL, completed_at TEXT,
-        latency_ms REAL
+        body_id TEXT PRIMARY KEY, body_type TEXT NOT NULL, config_id TEXT NOT NULL DEFAULT '',
+        expected_count INTEGER NOT NULL DEFAULT 0, expected_ids_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'FOLYAMATBAN', missing_ids_json TEXT NOT NULL DEFAULT '[]',
+        unexpected_ids_json TEXT NOT NULL DEFAULT '[]', duplicate_ids_json TEXT NOT NULL DEFAULT '[]',
+        parameter_errors INTEGER NOT NULL DEFAULT 0, event_count INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL, completed_at TEXT, latency_ms REAL
       );
       CREATE TABLE IF NOT EXISTS weld_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, body_id TEXT NOT NULL, weld_id TEXT NOT NULL,
-        current_ka REAL, weld_time_ms REAL, electrode_force_kn REAL, timestamp TEXT NOT NULL,
-        received_at REAL NOT NULL, errors_json TEXT NOT NULL, duplicate INTEGER NOT NULL DEFAULT 0,
-        raw_json TEXT NOT NULL
+        id INTEGER PRIMARY KEY AUTOINCREMENT, body_id TEXT NOT NULL, config_id TEXT NOT NULL DEFAULT '',
+        weld_id TEXT NOT NULL, current_ka REAL, weld_time_ms REAL, electrode_force_kn REAL,
+        timestamp TEXT NOT NULL, received_at REAL NOT NULL, errors_json TEXT NOT NULL,
+        duplicate INTEGER NOT NULL DEFAULT 0, raw_json TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_weld_events_body ON weld_events(body_id, id);
       CREATE TABLE IF NOT EXISTS rework_queue (
@@ -58,10 +59,15 @@ def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
         detail TEXT NOT NULL, raw_payload TEXT NOT NULL DEFAULT '', received_at TEXT NOT NULL
       );
     """)
-    # Forward-compatible migration for databases created by earlier project versions.
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(bodies)").fetchall()}
-    if "unexpected_ids_json" not in columns:
-        conn.execute("ALTER TABLE bodies ADD COLUMN unexpected_ids_json TEXT NOT NULL DEFAULT '[]'")
+    # Migrate databases from earlier prototype versions.
+    for table, column, declaration in (
+        ("bodies", "config_id", "TEXT NOT NULL DEFAULT ''"),
+        ("weld_events", "config_id", "TEXT NOT NULL DEFAULT ''"),
+        ("bodies", "unexpected_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ):
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
     conn.commit()
     return conn
 
@@ -69,7 +75,7 @@ def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
 def log_processing_error(
     conn: sqlite3.Connection, category: str, detail: str, raw_payload: str = ""
 ) -> None:
-    """Keep malformed and unsupported messages visible instead of silently dropping them."""
+    """Persist malformed messages and processing failures so operators can see them."""
     conn.execute(
         "INSERT INTO system_errors(category,detail,raw_payload,received_at) VALUES(?,?,?,?)",
         (category, detail[:2000], raw_payload[:10000], datetime.now().astimezone().isoformat()),
@@ -77,18 +83,48 @@ def log_processing_error(
     conn.commit()
 
 
-def _ensure_body(conn: sqlite3.Connection, body_id: str, body_type: str, timestamp: str) -> None:
+def _ensure_body(
+    conn: sqlite3.Connection, body_id: str, config_id: str,
+    config: dict[str, Any], timestamp: str,
+) -> None:
+    """Snapshot config identity and expected IDs for this run; recipe remains in Excel."""
     conn.execute(
-        """INSERT OR IGNORE INTO bodies(body_id,body_type,expected_count,expected_ids_json,started_at)
-           VALUES(?,?,0,'[]',?)""",
-        (body_id, body_type, timestamp),
+        """INSERT OR IGNORE INTO bodies(body_id,body_type,config_id,expected_count,expected_ids_json,started_at)
+           VALUES(?,?,?,?,?,?)""",
+        (body_id, config["label"], config_id, len(config["expected_weld_ids"]),
+         json.dumps(config["expected_weld_ids"], ensure_ascii=False), timestamp),
     )
+
+
+def _resolve_config(conn: sqlite3.Connection, event: dict[str, Any], body_id: str) -> tuple[str, dict[str, Any]] | None:
+    """Resolve config from event, falling back to the already registered body run."""
+    config_id = str(event.get("config_id") or "").strip()
+    if not config_id:
+        row = conn.execute("SELECT config_id FROM bodies WHERE body_id=?", (body_id,)).fetchone()
+        config_id = str(row["config_id"] or "") if row else ""
+    if not config_id:
+        log_processing_error(conn, "HIÁNYZÓ KONFIGURÁCIÓ", f"{body_id}: nincs config_id.", json.dumps(event, ensure_ascii=False))
+        return None
+    try:
+        config = get_configuration(config_id)
+    except CatalogError as exc:
+        log_processing_error(conn, "ISMERETLEN EXCEL-KONFIGURÁCIÓ", str(exc), json.dumps(event, ensure_ascii=False))
+        return None
+    row = conn.execute("SELECT config_id FROM bodies WHERE body_id=?", (body_id,)).fetchone()
+    if row and row["config_id"] and row["config_id"] != config_id:
+        log_processing_error(
+            conn, "KONFIGURÁCIÓ-ELTÉRÉS",
+            f"{body_id}: a futás konfigurációja {row['config_id']}, de az esemény {config_id} értéket küldött.",
+            json.dumps(event, ensure_ascii=False),
+        )
+        return None
+    return config_id, config
 
 
 def process_event(
     conn: sqlite3.Connection, event: dict[str, Any], received_at: float | None = None
 ) -> None:
-    """Process a decoded MQTT message. Duplicate deliveries remain visible and make the body fail."""
+    """Process one MQTT event. Parameter limits and required points always come from the XLSX catalog."""
     received_at = time.time() if received_at is None else received_at
     if not isinstance(event, dict):
         log_processing_error(conn, "ÉRVÉNYTELEN ÜZENET", "Az MQTT-üzenet gyökéreleme nem objektum.")
@@ -102,66 +138,71 @@ def process_event(
         return
 
     if event_type == "body_start":
-        body_type = str(event.get("body_type", "Ismeretlen"))
-        expected_ids = event.get("expected_weld_ids", [])
-        if not isinstance(expected_ids, list) or not all(isinstance(item, str) for item in expected_ids):
-            log_processing_error(conn, "ÉRVÉNYTELEN INDÍTÁS", "Az expected_weld_ids mezőnek szöveges azonosítók listájának kell lennie.", json.dumps(event, ensure_ascii=False))
+        resolved = _resolve_config(conn, event, body_id)
+        if not resolved:
             return
-        _ensure_body(conn, body_id, body_type, timestamp)
-        conn.execute(
-            """UPDATE bodies SET body_type=?,expected_count=?,expected_ids_json=?
-               WHERE body_id=? AND status='FOLYAMATBAN'""",
-            (body_type, len(expected_ids), json.dumps(expected_ids, ensure_ascii=False), body_id),
-        )
+        config_id, config = resolved
+        _ensure_body(conn, body_id, config_id, config, timestamp)
         conn.commit()
         return
 
     if event_type == "weld_result":
+        resolved = _resolve_config(conn, event, body_id)
+        if not resolved:
+            return
+        config_id, config = resolved
         weld_id = event.get("weld_id")
         if not isinstance(weld_id, str) or not weld_id.strip():
-            log_processing_error(conn, "HIÁNYZÓ HEGESZTÉSI PONT", "A weld_result eseményből hiányzik a weld_id.", json.dumps(event, ensure_ascii=False))
+            log_processing_error(conn, "HIÁNYZÓ HEGESZTÉSI PONT", f"{body_id}: a weld_result eseményből hiányzik a weld_id.", json.dumps(event, ensure_ascii=False))
             return
-        body_type = str(event.get("body_type", "Ismeretlen"))
-        errors = validate_event(event)
-        _ensure_body(conn, body_id, body_type, timestamp)
+        _ensure_body(conn, body_id, config_id, config, timestamp)
+        errors = validate_event(event, limits=config["limits"])
+        if weld_id not in config["expected_weld_ids"]:
+            errors.append("Váratlan hegesztési pont: nem szerepel a GitHubon verziózott Excel-katalógus pontlistájában.")
         exists = conn.execute(
-            "SELECT 1 FROM weld_events WHERE body_id=? AND weld_id=? LIMIT 1",
-            (body_id, weld_id),
+            "SELECT 1 FROM weld_events WHERE body_id=? AND weld_id=? LIMIT 1", (body_id, weld_id)
         ).fetchone()
         duplicate = exists is not None
         if duplicate:
-            errors = [*errors, "Duplikált üzenet: ez a hegesztési pont korábban már beérkezett."]
+            errors.append("Duplikált üzenet: ez a hegesztési pont korábban már beérkezett.")
         conn.execute(
-            """INSERT INTO weld_events(body_id,weld_id,current_ka,weld_time_ms,electrode_force_kn,
-               timestamp,received_at,errors_json,duplicate,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            (body_id, weld_id, event.get("current_ka"), event.get("weld_time_ms"),
+            """INSERT INTO weld_events(body_id,config_id,weld_id,current_ka,weld_time_ms,electrode_force_kn,
+               timestamp,received_at,errors_json,duplicate,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (body_id, config_id, weld_id, event.get("current_ka"), event.get("weld_time_ms"),
              event.get("electrode_force_kn"), timestamp, received_at,
              json.dumps(errors, ensure_ascii=False), int(duplicate), json.dumps(event, ensure_ascii=False)),
         )
+        param_error_count = len([
+            err for err in errors
+            if not err.startswith("Duplikált üzenet:") and not err.startswith("Váratlan hegesztési pont:")
+        ])
         conn.execute(
             "UPDATE bodies SET event_count=event_count+1,parameter_errors=parameter_errors+? WHERE body_id=?",
-            (len([e for e in errors if not e.startswith("Duplikált üzenet:")]), body_id),
+            (param_error_count, body_id),
         )
         conn.commit()
         return
 
     if event_type == "body_complete":
-        expected_ids = event.get("expected_weld_ids", [])
-        if not isinstance(expected_ids, list) or not all(isinstance(item, str) for item in expected_ids):
-            log_processing_error(conn, "ÉRVÉNYTELEN LEZÁRÁS", "Az expected_weld_ids mező hibás.", json.dumps(event, ensure_ascii=False))
+        resolved = _resolve_config(conn, event, body_id)
+        if not resolved:
             return
-        body_type = str(event.get("body_type", "Ismeretlen"))
-        _ensure_body(conn, body_id, body_type, timestamp)
+        config_id, config = resolved
+        _ensure_body(conn, body_id, config_id, config, timestamp)
+        expected_ids = list(config["expected_weld_ids"])
         conn.execute(
-            "UPDATE bodies SET body_type=?,expected_count=?,expected_ids_json=? WHERE body_id=?",
-            (body_type, len(expected_ids), json.dumps(expected_ids, ensure_ascii=False), body_id),
+            "UPDATE bodies SET expected_count=?,expected_ids_json=? WHERE body_id=?",
+            (len(expected_ids), json.dumps(expected_ids, ensure_ascii=False), body_id),
         )
         rows = conn.execute(
             "SELECT weld_id,errors_json FROM weld_events WHERE body_id=? ORDER BY id", (body_id,)
         ).fetchall()
         received_ids = [str(row["weld_id"]) for row in rows]
         parameter_errors = sum(
-            sum(not str(error).startswith("Duplikált üzenet:") for error in json.loads(row["errors_json"]))
+            sum(
+                not str(error).startswith(("Duplikált üzenet:", "Váratlan hegesztési pont:"))
+                for error in json.loads(row["errors_json"])
+            )
             for row in rows
         )
         result = evaluate_body(expected_ids, received_ids, parameter_errors)
@@ -201,12 +242,9 @@ def process_event(
         return
 
     if event_type == "rework_action":
-        action = event.get("action")
-        note = str(event.get("note") or "")
-        transitions = {
-            "START": (REWORK_WAITING, REWORK_IN_PROGRESS),
-            "COMPLETE": (REWORK_IN_PROGRESS, REWORK_DONE),
-        }
+        action, note = event.get("action"), str(event.get("note") or "")
+        transitions = {"START": (REWORK_WAITING, REWORK_IN_PROGRESS),
+                       "COMPLETE": (REWORK_IN_PROGRESS, REWORK_DONE)}
         if action not in transitions:
             log_processing_error(conn, "ISMERETLEN UTÓMUNKA-MŰVELET", f"Nem támogatott művelet: {action}", json.dumps(event, ensure_ascii=False))
             return
@@ -234,6 +272,14 @@ def process_event(
 
 def main() -> None:
     conn = connect_db()
+    try:
+        from src.catalog import list_configurations
+        all_configs = list_configurations()
+        print(f"Excel katalógus betöltve: {len(all_configs)} modell–alkatrész konfiguráció.")
+    except CatalogError as exc:
+        print(f"KRITIKUS KONFIGURÁCIÓS HIBA: {exc}")
+        raise
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="welding-monitor")
 
     def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
