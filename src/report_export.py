@@ -210,6 +210,18 @@ def _make_summary(
     return summary, by_model, info
 
 
+def _excel_safe(frame: pd.DataFrame) -> pd.DataFrame:
+    """Convert structured Python values to text before passing them to openpyxl."""
+    result = frame.copy()
+    for column in result.columns:
+        result[column] = result[column].map(
+            lambda value: json.dumps(value, ensure_ascii=False, default=str)
+            if isinstance(value, (dict, list, tuple)) else
+            (str(value)[:32000] if isinstance(value, str) and len(value) > 32000 else value)
+        )
+    return result
+
+
 def export_production_report(
     session_started_at: float | None,
     fault_rate_percent: float,
@@ -259,7 +271,7 @@ def export_production_report(
     temp = target.with_suffix(".tmp.xlsx")
     with pd.ExcelWriter(temp, engine="openpyxl") as writer:
         for sheet_name, frame in sheets.items():
-            safe_frame = frame.copy()
+            safe_frame = _excel_safe(frame)
             if safe_frame.empty and len(safe_frame.columns) == 0:
                 safe_frame = pd.DataFrame({"Információ": ["Nincs rögzített adat."]})
             safe_frame.to_excel(writer, index=False, sheet_name=sheet_name)
