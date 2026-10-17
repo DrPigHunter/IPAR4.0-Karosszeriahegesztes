@@ -50,7 +50,13 @@ def process_event(conn: sqlite3.Connection, event: dict[str, Any], received_at: 
         received_ids = [str(row["weld_id"]) for row in rows]
         parameter_errors = sum(len(json.loads(row["errors_json"])) for row in rows)
         result = evaluate_body(expected_ids, received_ids, parameter_errors)
-        conn.execute("UPDATE bodies SET status=?,missing_ids_json=?,duplicate_ids_json=?,parameter_errors=?,completed_at=? WHERE body_id=?", (result["status"], json.dumps(result["missing_ids"]), json.dumps(result["duplicate_ids"]), parameter_errors, str(event.get("timestamp", "")), body_id))
+        sent_at = str(event.get("timestamp", ""))
+        try:
+            sent_epoch = datetime.fromisoformat(sent_at).timestamp()
+            latency_ms = max(0.0, (received_at - sent_epoch) * 1000.0)
+        except (ValueError, OverflowError):
+            latency_ms = None
+        conn.execute("UPDATE bodies SET status=?,missing_ids_json=?,duplicate_ids_json=?,parameter_errors=?,completed_at=?,latency_ms=? WHERE body_id=?", (result["status"], json.dumps(result["missing_ids"]), json.dumps(result["duplicate_ids"]), parameter_errors, sent_at, latency_ms, body_id))
         conn.commit()
 
 def main() -> None:
