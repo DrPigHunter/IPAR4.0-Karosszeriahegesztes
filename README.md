@@ -6,12 +6,12 @@ Szoftveres Ipar 4.0 demonstráció: tíz különböző járműmodell bal oldalfa
 
 ## Excel a referencia-adatforrás
 
-A `config/welding_catalog.xlsx` az egyetlen referencia-konfigurációs forrás:
+A `config/welding_catalog.xml` a GitHubon verziózott, két munkalapos Excel-kompatibilis referencia-munkafüzet (Excelben közvetlenül megnyitható). Ha mellette natív `config/welding_catalog.xlsx` fájl is jelen van, az kap elsőbbséget. A munkafüzet az egyetlen referencia-konfigurációs forrás:
 
 - **Modellek** lap: 10 járműmodell, mindegyikhez külön `config_id`, bal oldalfal, elvárt pontszám és saját áramerősség-, hegesztésiidő- és elektródaerő-határérték.
 - **Hegesztési pontok** lap: modellenként eltérő pontazonosítók, pontmegnevezések, sorrend és szimulált névleges paraméterek.
 - Az alkalmazás a kiválasztott konfiguráció névleges értékeiből generál adatot, a monitor pedig ugyanannak az Excel-konfigurációnak a határértékeihez méri.
-- A konfigurációkat az SQLite nem helyettesíti és nem generálja: az adatbázis kizárólag mérési eseményeket, futási állapotokat, hibákat és utómunka-naplót tartalmaz.
+- A referencia-munkafüzet formátuma Excel SpreadsheetML XML; a `Modellek` és `Hegesztési pontok` külön munkalapként jelenik meg. A konfigurációkat az SQLite nem helyettesíti és nem generálja: az adatbázis kizárólag mérési eseményeket, futási állapotokat, hibákat és utómunka-naplót tartalmaz.
 
 Példák a modellekre: CUPRA Terramar, Audi Q8, Q5, Q3, Q4 e-tron, A6, A3, Volkswagen Tiguan, ID.4 és Škoda Kodiaq. Ezekhez a projekt demonstrációs, saját pontazonosítókat és eltérő szintetikus paramétereket használ.
 
