@@ -14,6 +14,106 @@ WEAR_HEAT_LOSS_PER_PERCENT = 0.0025  # 0.25% heat proxy loss per 1% electrode we
 CURRENT_STEP_KA = 0.05
 WELD_TIME_STEP_MS = 2.0
 MAX_CORRECTION_STEPS = 80
+DEFAULT_TOOL_CHANGE_INTERVAL_BODIES = 100
+MIN_TOOL_CHANGE_INTERVAL_BODIES = 1
+MAX_TOOL_CHANGE_INTERVAL_BODIES = 10_000
+
+
+def ensure_wear_state(state: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    """Initialize lifetime and current-tool counters without discarding old state."""
+    defaults = {
+        "wear_percent": 0.0,
+        "total_weld_points": 0,
+        "corrected_points": 0,
+        "correction_steps": 0,
+        "uncorrectable_points": 0,
+        "current_tool_number": 1,
+        "tool_change_count": 0,
+        "bodies_since_tool_change": 0,
+        "tool_weld_points": 0,
+        "tool_corrected_points": 0,
+        "tool_correction_steps": 0,
+        "tool_uncorrectable_points": 0,
+    }
+    for key, value in defaults.items():
+        state.setdefault(key, value)
+    return state
+
+
+def _validate_tool_change_interval(interval_bodies: int) -> int:
+    if isinstance(interval_bodies, bool) or not isinstance(interval_bodies, int):
+        raise ValueError("Az automatikus eszközcsere-intervallumnak egész karosszériadarab-számnak kell lennie.")
+    if not MIN_TOOL_CHANGE_INTERVAL_BODIES <= interval_bodies <= MAX_TOOL_CHANGE_INTERVAL_BODIES:
+        raise ValueError(
+            f"Az eszközcsere-intervallum {MIN_TOOL_CHANGE_INTERVAL_BODIES} és "
+            f"{MAX_TOOL_CHANGE_INTERVAL_BODIES} karosszéria között állítható."
+        )
+    return interval_bodies
+
+
+def replace_electrode_tool(
+    wear_state: MutableMapping[str, Any],
+    *,
+    reason: str = "MANUAL",
+    body_id: str | None = None,
+) -> dict[str, Any]:
+    """Register a tool/electrode replacement and reset only the new tool's wear."""
+    state = ensure_wear_state(wear_state)
+    previous_tool_number = int(state["current_tool_number"])
+    change = {
+        "change_mode": str(reason),
+        "completed_body_id": body_id or "",
+        "previous_tool_number": previous_tool_number,
+        "new_tool_number": previous_tool_number + 1,
+        "tool_change_number": int(state["tool_change_count"]) + 1,
+        "bodies_since_previous_change": int(state["bodies_since_tool_change"]),
+        "wear_percent_before_reset": round(float(state["wear_percent"]), 3),
+        "wear_percent_after_reset": 0.0,
+        "tool_weld_points_before_reset": int(state["tool_weld_points"]),
+        "tool_corrected_points_before_reset": int(state["tool_corrected_points"]),
+        "tool_uncorrectable_points_before_reset": int(state["tool_uncorrectable_points"]),
+    }
+    state["current_tool_number"] = change["new_tool_number"]
+    state["tool_change_count"] = change["tool_change_number"]
+    state["bodies_since_tool_change"] = 0
+    state["wear_percent"] = 0.0
+    state["tool_weld_points"] = 0
+    state["tool_corrected_points"] = 0
+    state["tool_correction_steps"] = 0
+    state["tool_uncorrectable_points"] = 0
+    state["last_tool_change"] = dict(change)
+    return change
+
+
+def replace_tool_if_due(
+    wear_state: MutableMapping[str, Any],
+    interval_bodies: int = DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    *,
+    enabled: bool = True,
+    body_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Replace before the next cycle if the configured body-life limit is already met."""
+    interval = _validate_tool_change_interval(interval_bodies)
+    state = ensure_wear_state(wear_state)
+    if enabled and int(state["bodies_since_tool_change"]) >= interval:
+        return replace_electrode_tool(state, reason="AUTO", body_id=body_id)
+    return None
+
+
+def register_completed_body_for_tool(
+    wear_state: MutableMapping[str, Any],
+    interval_bodies: int = DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    *,
+    enabled: bool = True,
+    body_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Count one fully finalized body and replace immediately when the limit is reached."""
+    interval = _validate_tool_change_interval(interval_bodies)
+    state = ensure_wear_state(wear_state)
+    state["bodies_since_tool_change"] = int(state["bodies_since_tool_change"]) + 1
+    if enabled and int(state["bodies_since_tool_change"]) >= interval:
+        return replace_electrode_tool(state, reason="AUTO", body_id=body_id)
+    return None
 
 
 def _quality_index(event: dict[str, Any], point: dict[str, Any], wear_percent: float) -> float:
@@ -48,11 +148,7 @@ def apply_electrode_wear(
     if not 0.0 <= float(wear_per_point_percent) <= 1.0:
         raise ValueError("A pontonkénti elektróda-kopás 0 és 1 százalék közé essen.")
     state: MutableMapping[str, Any] = wear_state if wear_state is not None else {}
-    state.setdefault("wear_percent", 0.0)
-    state.setdefault("total_weld_points", 0)
-    state.setdefault("corrected_points", 0)
-    state.setdefault("correction_steps", 0)
-    state.setdefault("uncorrectable_points", 0)
+    ensure_wear_state(state)
 
     limits = config["limits"]
     point_by_id = {str(point["weld_id"]): point for point in config["points"]}
@@ -119,22 +215,30 @@ def apply_electrode_wear(
             ),
         })
 
+        event["electrode_tool_number"] = int(state["current_tool_number"])
         cycle_weld_points += 1
         state["total_weld_points"] = int(state["total_weld_points"]) + 1
+        state["tool_weld_points"] = int(state["tool_weld_points"]) + 1
         if corrected:
             cycle_corrections += 1
             state["corrected_points"] = int(state["corrected_points"]) + 1
+            state["tool_corrected_points"] = int(state["tool_corrected_points"]) + 1
         if steps:
             cycle_steps += steps
             state["correction_steps"] = int(state["correction_steps"]) + steps
+            state["tool_correction_steps"] = int(state["tool_correction_steps"]) + steps
         if not quality_ok:
             cycle_uncorrectable += 1
             state["uncorrectable_points"] = int(state["uncorrectable_points"]) + 1
+            state["tool_uncorrectable_points"] = int(state["tool_uncorrectable_points"]) + 1
 
     return {
         "wear_enabled": bool(wear_enabled),
         "auto_correct_enabled": bool(auto_correct and wear_enabled),
         "wear_percent": round(float(state["wear_percent"]), 3),
+        "current_tool_number": int(state["current_tool_number"]),
+        "tool_change_count": int(state["tool_change_count"]),
+        "bodies_since_tool_change": int(state["bodies_since_tool_change"]),
         "weld_points": cycle_weld_points,
         "corrected_points": cycle_corrections,
         "correction_steps": cycle_steps,
