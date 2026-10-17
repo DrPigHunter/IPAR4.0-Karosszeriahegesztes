@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import random
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -147,7 +149,9 @@ def automatic_production_worker(
         previous_config = config_id
         try:
             body_id, events = generate_body_events(
-                config_id, fault_rate=float(state.get("fault_rate", DEFAULT_FAULT_RATE))
+                config_id,
+                fault_rate=float(state.get("fault_rate", DEFAULT_FAULT_RATE)),
+                fault_mode=str(state.get("fault_mode", "within_limits")),
             )
             state["body_id"] = body_id
             state["config_id"] = config_id
@@ -185,6 +189,7 @@ def start_automatic_production() -> None:
     stop_event = threading.Event()
     state = {
         "running": True, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
+        "fault_mode": "within_limits",
         "session_started_at": st.session_state.get("app_session_started_at", time.time()),
         "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
         "error": None,
@@ -251,8 +256,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if "app_session_started_at" not in st.session_state:
+# Reset the dashboard's statistics window when the Python process or dashboard source changes.
+# This stops historical rejected bodies from appearing as failures in the new run.
+_code_mtime = Path(__file__).stat().st_mtime
+if (
+    st.session_state.get("app_process_id") != os.getpid()
+    or st.session_state.get("app_code_mtime") != _code_mtime
+):
+    st.session_state["app_process_id"] = os.getpid()
+    st.session_state["app_code_mtime"] = _code_mtime
     st.session_state["app_session_started_at"] = time.time()
+    st.session_state["app_session_id"] = uuid.uuid4().hex
+    st.session_state.pop("auto_state", None)
 if "auto_state" not in st.session_state:
     start_automatic_production()
 
@@ -432,13 +447,40 @@ def render_statistics_tab() -> None:
             st.caption("Még nincs lezárt karosszéria.")
         else:
             st.dataframe(status_counts, use_container_width=True, hide_index=True, height=260)
-        fault_rate = st.slider(
-            "Mesterséges hibák valószínűsége",
-            min_value=0.0, max_value=0.00025, value=0.0,
-            step=0.000025, format="%.5f", key="fault_rate_control_v2",
-            help="Alapérték 0,00000: nincs mesterséges hibainjektálás. A tesztcsúszka felső határa is alacsony, így nem ugrik fel tömegesen az utómunka-arány.",
+        st.markdown("### Pontonkénti eltérés beállítása")
+        fault_rate_percent = st.slider(
+            "Egy hegesztési pont eltérésének esélye (%)",
+            min_value=0.0,
+            max_value=0.1,
+            value=0.0,
+            step=0.001,
+            format="%.3f%%",
+            key="fault_rate_percent_v3",
+            help="0,000% esetén nem kerül be mesterséges eltérés. A beállítás pontonként értendő, nem karosszériánként.",
         )
-        st.session_state["auto_state"]["fault_rate"] = fault_rate
+        fault_mode_label = st.selectbox(
+            "Az eltérés viselkedése",
+            options=[
+                "Megengedett tartományon belül marad (megfelelő)",
+                "Átlépi a határértéket (utómunka)",
+            ],
+            index=0,
+            key="fault_mode_choice_v3",
+            help=(
+                "Az első mód a mérést a megengedett alsó vagy felső határ közelébe viszi, de nem lépi át. "
+                "A második mód egy kis lépéssel a határon kívülre állít egy paramétert."
+            ),
+        )
+        st.session_state["auto_state"]["fault_rate"] = float(fault_rate_percent) / 100.0
+        st.session_state["auto_state"]["fault_mode"] = (
+            "outside_limits"
+            if fault_mode_label.startswith("Átlépi")
+            else "within_limits"
+        )
+        st.caption(
+            f"Pontonkénti esély: {fault_rate_percent:.3f}% · "
+            f"{'a kiválasztott pont továbbra is megfelelő' if st.session_state['auto_state']['fault_mode'] == 'within_limits' else 'az eltérés határon kívülre kerül'}."
+        )
 
     st.markdown("### Automatikus utómunka-sor")
     if rework.empty:
