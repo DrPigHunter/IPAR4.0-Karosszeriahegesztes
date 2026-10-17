@@ -127,9 +127,9 @@ with st.sidebar:
     st.divider()
     st.caption(
         "A modell/oldalfal pontlistáját és a névleges paramétereket a GitHubon verziózott "
-        "config/welding_catalog.xml adja. Az SQLite csak méréseket, állapotokat, hibákat és utómunka-naplót tárol."
+        "config/welding_catalog.xlsx adja. Az SQLite csak méréseket, állapotokat, hibákat és utómunka-naplót tárol."
     )
-    st.caption("Az Excel-kompatibilis XML-munkafüzet módosítása után indítsd újra az alkalmazást a katalógus újraolvasásához.")
+    st.caption("Az Excel-munkafüzet módosítása után indítsd újra az alkalmazást a katalógus újraolvasásához.")
 
 
 @st.fragment(run_every="1s")
