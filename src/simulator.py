@@ -12,6 +12,7 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from src.catalog import get_configuration, list_configurations
+from src.factory_settings import DEFAULT_NON_WEAR_DEFECT_PROBABILITY
 from src.wear_control import (
     COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     COOLANT_INLET_TARGET_MAX_C,
@@ -26,6 +27,12 @@ EVENT_TOPIC = "welding/events"
 
 FAULT_MODES = ("within_limits", "outside_limits")
 MAX_FAULT_PROBABILITY = 0.001  # 0.1% per welding point
+MAX_NON_WEAR_DEFECT_PROBABILITY = 0.001  # 0.1% per welding point
+NON_WEAR_FAULT_CAUSE_HYPOTHESES = (
+    "SURFACE_CONTAMINATION_OR_COATING_VARIATION",
+    "PART_FIT_UP_OR_ELECTRODE_ALIGNMENT",
+    "PROCESS_PARAMETER_VARIATION",
+)
 
 
 def utc_now() -> str:
@@ -66,6 +73,22 @@ def _apply_point_variation(
         )
 
 
+def _apply_non_wear_process_defect(
+    event: dict[str, Any], limits: Any, rng: random.Random
+) -> None:
+    """Inject a rare, wear-independent process defect for simulation/testing.
+
+    A single process measurement is moved just outside the catalog limit so the
+    existing monitor can detect it. The cause is only a synthetic hypothesis label;
+    the simulator does not physically model contamination or part fit-up.
+    """
+    _apply_point_variation(event, limits, rng, "outside_limits")
+    event["simulated_variation"] = "BACKGROUND_PROCESS_DEFECT"
+    event["non_wear_process_defect"] = True
+    event["simulated_failure_source"] = "NON_WEAR_PROCESS_VARIATION"
+    event["simulated_failure_cause_hypothesis"] = rng.choice(NON_WEAR_FAULT_CAUSE_HYPOTHESES)
+
+
 def generate_body_events(
     config_id: str,
     fault_rate: float = 0.0,
@@ -78,16 +101,21 @@ def generate_body_events(
     coolant_flow_l_min: float = COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     coolant_inlet_temp_c: float = COOLANT_INLET_TARGET_MAX_C,
     coolant_outlet_temp_c: float = COOLANT_OUTLET_TARGET_MAX_C,
+    non_wear_defect_probability: float = DEFAULT_NON_WEAR_DEFECT_PROBABILITY,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Generate a complete cycle; fault_rate is a probability per individual weld point.
+    """Generate a simulated sidewall.
 
-    A value of 0.001 means 0.1% per point. In within_limits mode, selected
-    measurements move close to an accepted limit, so the body stays compliant.
-    In outside_limits mode, selected measurements exceed one limit by one
-    measurement-resolution step and should be sent to rework.
+    ``fault_rate`` is deliberate test injection (0.001 = 0.1% per point).
+    ``non_wear_defect_probability`` is a separate, rare background process-defect
+    probability independent of the electrode-wear state. The default 0.01% per
+    point is a documented demo assumption, not an industry-wide measured rate.
+    Background defects are represented by one monitored parameter-limit breach so
+    the existing quality monitor can send the sidewall to rework.
     """
     if not 0 <= fault_rate <= MAX_FAULT_PROBABILITY:
         raise ValueError("A pontonkénti hibavalószínűség 0 és 0.001 között lehet (0–0,1%).")
+    if not 0.0 <= non_wear_defect_probability <= MAX_NON_WEAR_DEFECT_PROBABILITY:
+        raise ValueError("A kopástól független hibavalószínűség 0 és 0.001 közé essen (0–0,1%).")
     if fault_mode not in FAULT_MODES:
         raise ValueError(f"Ismeretlen hibamód: {fault_mode!r}")
 
@@ -121,6 +149,10 @@ def generate_body_events(
         }
         if fault_rate > 0 and rng.random() < fault_rate:
             _apply_point_variation(event, limits, rng, fault_mode)
+        # A second probability is separate from the wear model: even a fresh
+        # electrode can occasionally produce an unacceptable simulated weld.
+        if non_wear_defect_probability > 0 and rng.random() < non_wear_defect_probability:
+            _apply_non_wear_process_defect(event, limits, rng)
         events.append(event)
 
     events.append({
