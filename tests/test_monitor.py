@@ -128,8 +128,9 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(report["point_completeness_percent"], 100.0)
         self.assertFalse(report["rework_required"])
         self.assertIsNotNone(report["duration_seconds"])
-        self.assertLess(report["duration_seconds"], 20.0)
-        self.assertTrue(report["within_20_second_target"])
+        self.assertLess(report["duration_seconds"], 100.0)
+        self.assertTrue(report["within_100_second_target"])
+        self.assertEqual(report["target_cycle_seconds"], 100)
         self.assertTrue((log_dir / "production_summary.json").exists())
         self.assertEqual(len(list(log_dir.glob("production_*.jsonl"))), 1)
 
