@@ -91,8 +91,13 @@ Start-Sleep -Seconds 2
 Write-Host "[4/5] Monitor es kezelofelulet inditasa..." -ForegroundColor Yellow
 $quotedRoot = $root.Replace("'", "''")
 $quotedPython = $venvPython.Replace("'", "''")
-$monitorCommand = "Set-Location -LiteralPath '$quotedRoot'; & '$quotedPython' -m src.monitor"
-$dashboardCommand = "Set-Location -LiteralPath '$quotedRoot'; & '$quotedPython' -m streamlit run src/dashboard.py"
+$logDir = Join-Path $root "logs"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$quotedLogDir = $logDir.Replace("'", "''")
+$quotedMonitorLog = (Join-Path $logDir "monitor.log").Replace("'", "''")
+$quotedDashboardLog = (Join-Path $logDir "dashboard.log").Replace("'", "''")
+$monitorCommand = "Set-Location -LiteralPath '$quotedRoot'; New-Item -ItemType Directory -Force -Path '$quotedLogDir' | Out-Null; & '$quotedPython' -u -m src.monitor 2>&1 | Tee-Object -FilePath '$quotedMonitorLog' -Append"
+$dashboardCommand = "Set-Location -LiteralPath '$quotedRoot'; New-Item -ItemType Directory -Force -Path '$quotedLogDir' | Out-Null; & '$quotedPython' -u -m streamlit run src/dashboard.py 2>&1 | Tee-Object -FilePath '$quotedDashboardLog' -Append"
 
 Start-Process -FilePath "powershell.exe" -ArgumentList @(
     "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $monitorCommand
