@@ -16,7 +16,7 @@ Ipar 4.0 oktatási demonstráció: tíz járműmodell bal oldalfalának ponthege
 
 A webes felület címe: **http://localhost:8501**
 
-A monitor és a dashboard két külön PowerShell-ablakban fut; hagyd nyitva ezeket a szimuláció közben. Az **Élő gyártás** fülön az automatikus gyártás alapértelmezetten elindul. Ötmásodpercenként új oldalfal indul, a modell automatikusan változik. Az automatika a webes felületen leállítható és újraindítható.
+A monitor és a dashboard két külön PowerShell-ablakban fut; hagyd nyitva ezeket a szimuláció közben. Az **Élő gyártás** fülön az automatikus gyártás alapértelmezetten elindul. Egy oldalfal hegesztése 90 ms-os pontközzel szimulálódik, és a ciklus célideje 20 másodperc alatt van. Egy ciklus befejezése után a rendszer 10 másodpercet vár, majd automatikusan másik modellt választ. Az automatika a webes felületen leállítható és újraindítható.
 
 ## Kézi indítás
 
@@ -43,7 +43,7 @@ Egy harmadik ablakban:
 - **Élő gyártás:** kompakt állapotjelzők, aktuális karosszéria, pontteljesség és színkódolt ponttérkép görgethető, hosszú mérési táblázat nélkül.
 - **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények, mérési napló, hibanapló és utómunka-kezelés.
 - **Automatizálás:** a 10 modellből a rendszer automatikusan választ; új karosszériát 5 másodperces indítási időközzel küld a szimulációba.
-- **Hibavalószínűség:** alapértelmezetten alacsony (0,0001). A statisztika fülön demonstrációs célra állítható.
+- **Hibavalószínűség:** alapértelmezetten 0 (nincs automatikusan injektált hiba). A statisztika fülön demonstrációs hibateszthez állítható.
 - **Utómunka:** a hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont továbbra is hibának számít, és automatikusan utómunka-sorba kerül.
 
 ## Excel-katalógus
@@ -69,6 +69,12 @@ A config/welding_catalog.xlsx az alkalmazás referencia-konfigurációja, két m
 Minden modellen 100–150 közötti hegesztési pont szerepel. A tools/generate_catalog.py reprodukálhatóan újra tudja készíteni a munkafüzetet; a GitHub Actions a generátor módosításakor frissíti a verziózott XLSX-et.
 
 Az SQLite kizárólag futási adatokat tárol: mérési eseményeket, karosszériaállapotokat, feldolgozási hibákat és utómunka-naplót. Nem helyettesíti az Excel-referenciakatalógust.
+
+## Automatikus futásnaplók
+
+Minden lezárt karosszériaciklusról a monitor külön JSON-fájlt ment a `logs` mappába. A jelentés tartalmazza a modellt, a várt és beérkezett pontokat, a teljességi arányt, a paraméterhibákat, a minősítést, az utómunkát és a mért ciklusidőt. Emellett a rendszer napi `production_ÉÉÉÉ-HH-NN.jsonl` eseménynaplót és `production_summary.json` összesítőt frissít. Ezek a generált naplók helyi fájlok, a Git nem követi őket.
+
+Az összesítő adatbázisból számol, így tartalmazhat korábbi verziókból származó futásokat is. A dashboard fő statisztikái az aktuális böngésző-munkamenet új ciklusait külön számolják, a korábbi futások pedig az előzményekben maradnak.
 
 ## Tesztek futtatása
 
