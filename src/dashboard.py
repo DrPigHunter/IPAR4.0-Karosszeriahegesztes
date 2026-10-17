@@ -5,6 +5,7 @@ import json
 import sqlite3
 import sys
 import time
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,17 @@ from src.monitor import (
     REWORK_IN_PROGRESS, REWORK_WAITING, TOPIC,
 )
 from src.simulator import generate_body_events, publish_events
+
+
+def publisher_worker(events: list[dict[str, Any]], delay_ms: int, state: dict[str, Any]) -> None:
+    """Publish asynchronously so the live UI keeps updating during welding."""
+    try:
+        publish_events(events, delay_ms=delay_ms)
+        state["completed"] = True
+    except Exception as exc:
+        state["error"] = str(exc)
+    finally:
+        state["running"] = False
 
 st.set_page_config(page_title="Oldalfal-hegesztés | Ipar 4.0", page_icon="🏭", layout="wide")
 st.title("Autóipari oldalfal-ponthegesztés felügyelete")
@@ -95,14 +107,21 @@ with st.sidebar:
     st.write(f"Hegesztési idő: {limits.weld_time_min:g}–{limits.weld_time_max:g} ms")
     st.write(f"Elektródaerő: {limits.force_min:g}–{limits.force_max:g} kN")
     fault_rate = st.slider("Hibák valószínűsége", 0.0, 0.30, 0.06, 0.01)
-    delay_ms = st.slider("Üzenetek közötti késleltetés (ms)", 0, 50, 5, 1)
+    delay_ms = st.slider("Szimulációs pontköz (ms)", 20, 250, 90, 10)
+    st.caption("Lassabb beállításnál a mérési pontok érkezés közben is látszanak a felületen.")
     if st.button("▶ Új oldalfal indítása", type="primary", use_container_width=True):
         try:
             body_id, generated = generate_body_events(selected_config_id, fault_rate)
-            with st.spinner(f"{body_id} üzeneteinek küldése MQTT-n..."):
-                publish_events(generated, delay_ms=delay_ms)
+            status = {"running": True, "completed": False, "error": None, "body_id": body_id}
+            worker = threading.Thread(
+                target=publisher_worker, args=(generated, delay_ms, status), daemon=True,
+                name=f"welding-publisher-{body_id}",
+            )
             st.session_state["last_body_id"] = body_id
-            st.success(f"Indítva: {body_id}")
+            st.session_state["publisher_status"] = status
+            st.session_state["publisher_thread"] = worker
+            worker.start()
+            st.toast(f"Az oldalfal eseményeinek küldése elindult: {body_id}")
         except Exception as exc:
             st.error(f"Nem sikerült elindítani a szimulációt: {exc}")
     st.divider()
@@ -113,13 +132,22 @@ with st.sidebar:
     st.caption("Az Excel-kompatibilis XML-munkafüzet módosítása után indítsd újra az alkalmazást a katalógus újraolvasásához.")
 
 
-@st.fragment(run_every="2s")
+@st.fragment(run_every="1s")
 def live_monitor_panel() -> None:
     try:
         bodies, events, rework, errors, actions = read_tables()
     except (sqlite3.Error, pd.errors.DatabaseError) as exc:
         st.error(f"Az adatbázis nem olvasható. Ellenőrizd, hogy fut-e a monitor: {exc}")
         return
+
+    publish_status = st.session_state.get("publisher_status")
+    if publish_status:
+        if publish_status.get("running"):
+            st.info(f"MQTT-adatküldés folyamatban: {publish_status['body_id']} — a pontadatok érkezéskor jelennek meg.")
+        elif publish_status.get("error"):
+            st.error(f"Az MQTT-küldés hibával leállt: {publish_status['error']}")
+        elif publish_status.get("completed"):
+            st.success(f"Az oldalfal összes szimulált eseményét elküldtük: {publish_status['body_id']}")
 
     if bodies.empty:
         st.info("Várakozás az első oldalfalra. Indítsd el a brokert és a monitort, majd válassz modellt.")
