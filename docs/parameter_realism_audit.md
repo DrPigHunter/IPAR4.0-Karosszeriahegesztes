@@ -19,7 +19,7 @@ A teszt csak **széles plausibilitási szűrő**. Nem igazolja, hogy az adott é
 1. European Aluminium Association, *Resistance Welding* (2015): https://european-aluminium.eu/wp-content/uploads/2022/11/5-resistance-welding_2015.pdf
 2. Wohner et al., *Resistance spot welding with variable electrode force—development and benefit of a force profile to extend the weldability of 22MnB5+AS150*, Welding in the World: https://link.springer.com/article/10.1007/s40194-020-01001-2
 3. TWI, *How can I minimise electrode wear in resistance spot welding?*: https://www.twi-global.com/technical-knowledge/faqs/faq-how-can-i-minimise-electrode-wear-in-resistance-spot-welding
-4. European Commission CORDIS, *Adaptive Tip dress Control for Automated Resistance Spot Welding (SmartDress)*: https://cordis.europa.eu/project/id/286598/reporting/de
+4. European Commission CORDIS, *Adaptive Tip dress Control for Automated Resistance Spot Welding (SmartDress)*: https://cordis.europa.eu/project/id/286598/reporting/de. A beszámoló az elektróda-élettartam 10 000-ről 30 000+ hegesztési pontra történő növelését fejlesztési célként tárgyalja; ez nagyságrendi támpont, nem minden gépre érvényes garancia.
 
 ## Beállítások a demonstrációban
 
@@ -30,7 +30,7 @@ A teszt csak **széles plausibilitási szűrő**. Nem igazolja, hogy az adott é
 | Önkorrekciós időlépés | 5 ms | Numerikus szimulációs lépés, nem gyártói érték. |
 | Szintetikus minőségi cél | 95% | Demonstrációs hőbeviteli proxy küszöbe, nem szabványos elfogadási határ. |
 | Kopásnövekedés | 0,005 százalékpont / pont | Állítható szimulációs paraméter. Nem egy gyárban mért valódi elektródakopási sebesség. |
-| Csereintervallum | 100 lezárt **baloldalfal-ciklus** | Szemléltető alapérték. A ciklus itt egyetlen oldalfal-pontprogram, nem egy teljes autó. Valós üzemhez a tényleges karbantartási előzményből kell beállítani. |
+| Csereintervallum | 100 lezárt **baloldalfal-ciklus** | Egy oldalfal kb. 140 pontjával ez nagyjából 14 000 hegesztés. Ez az EU CORDIS SmartDress projektjében említett 10 000–30 000 pont közötti elektróda-élettartam fejlesztési céljával azonos nagyságrend, de nem univerzális csereelőírás; valós üzemi adatok alapján kell beállítani. |
 | Szimulált eszközcsere-idő | 5 másodperc | A gépi modell szünetéből elfogyasztott szimulációs idő, nem állítás az ipari hegycserélő fizikai idejéről. |
 | Hűtővíz | 6 l/perc; 20 °C be; 30 °C ki | TWI referencia bevonatos/vastagabb acélhoz. A hűtési értékek eltérésénél figyelmeztetés és magasabb szimulált kopási stressz jelenik meg. |
 | Pontonkénti hibainjektálás | Alapból 0%; legfeljebb 0,1% | Tesztparaméter a felügyeleti rendszer bemutatására, nem valós gyári selejtarány. |
