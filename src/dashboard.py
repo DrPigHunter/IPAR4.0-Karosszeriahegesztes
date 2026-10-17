@@ -716,7 +716,6 @@ def render_production_tab() -> None:
             "Szimuláció sebessége (%)",
             min_value=MIN_SPEED_PERCENT,
             max_value=MAX_SPEED_PERCENT,
-            value=normalize_speed_percent(st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)),
             step=100,
             key="speed_percent_input",
             help="100% = jelenlegi sebesség (90 ms pontonként, 10 mp szünet). Legfeljebb 10 000%-ra emelhető.",
