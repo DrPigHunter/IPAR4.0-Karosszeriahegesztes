@@ -19,6 +19,8 @@ class CatalogTests(unittest.TestCase):
                                cfg["limits"].force_min, cfg["limits"].force_max)
                               for cfg in configs}), 10)
         for cfg in configs:
+            self.assertGreaterEqual(cfg["expected_count"], 100)
+            self.assertLessEqual(cfg["expected_count"], 150)
             self.assertEqual(len(cfg["points"]), cfg["expected_count"])
             self.assertEqual(len(cfg["expected_weld_ids"]), len(set(cfg["expected_weld_ids"])))
 
