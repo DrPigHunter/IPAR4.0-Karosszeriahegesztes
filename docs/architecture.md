@@ -2,69 +2,79 @@
 
 ## Cél és rendszerhatár
 
-A rendszer egy szoftveresen szimulált autóipari ponthegesztési folyamatot modellez. A rendszerhatár a karosszéria indításától a pontonkénti MQTT-adatközvetítésen, az automatikus ellenőrzésen és a selejt utómunka-sorba helyezésén át az operátori dashboardig tart. Valódi hegesztőrobot, szenzor vagy Audi-gyártási adat nem része a megoldásnak.
+A rendszer tíz járműmodell bal oldalfalának szoftveres ponthegesztési folyamatát szimulálja. A referenciakonfigurációk és a hegesztési pontok a GitHubon verziózott `config/welding_catalog.xlsx` fájlban vannak. A rendszerhatár az Excel-recept betöltésétől az MQTT-adatközvetítésen és ellenőrzésen át a kezelőfelületig és az utómunka-sorba irányításig tart. Valódi gyártási adat, robot vagy hegesztőberendezés nem része a rendszernek.
+
+## Adatforrások és tárolás
+
+- **Excel referencia-katalógus:** járműmodell, alkatrész, konfigurációazonosító, elvárt pontlista, pontmegnevezés, sorrend, névleges paraméterek és modellenkénti határértékek. GitHubban verziózott.
+- **MQTT:** `welding/events` témán JSON események mennek QoS 1 szinten.
+- **SQLite futásnapló:** a fogadott hegesztési értékeket, karosszériafutások állapotát, feldolgozási hibákat és utómunka-eseményeket tárolja. Nem tartalmazza a receptkatalógus forrásadatait.
+- **Streamlit:** Excelből beolvasott referenciaadatokat mutat, megjeleníti az aktív futást, a ponttérképet, a méréseket, az előzményeket és az utómunka-sor állapotát.
 
 ## CPS-komponensek és szerepek
 
-- **Fizikai folyamat modellje:** a karosszéria és a hozzá tartozó hegesztési pontok szimulációja.
-- **Logikai komponensek:** szimulátor/publisher, MQTT-broker, monitor/ellenőrző, SQLite-adattár és Streamlit dashboard.
-- **Transzducer/szenzor szerepének szimulációja:** a szimulátor generálja az áramerősség, hegesztési idő és elektródaerő értékeit.
-- **Emberi szerep:** az operátor elindítja a szimulációt, figyeli a ponttérképet, megtekinti a hibákat, és az utómunka-soron kezeli a selejtes karosszériákat.
+- **Fizikai folyamat modellje:** egy adott járműmodell bal oldalfalának hegesztési pontjai.
+- **Logikai komponensek:** Excel-katalógus betöltő, szimulátor/publisher, MQTT-broker, monitor/ellenőrző, SQLite-adattár és Streamlit dashboard.
+- **Transzducer/szenzor szerepének szimulációja:** a szimulátor a kiválasztott Excel-konfiguráció névleges értékei körül áramerősséget, hegesztési időt és elektródaerőt generál.
+- **Emberi szerep:** az operátor kiválasztja a járműmodellt, figyeli a hegesztést, ellenőrzi a hibajelzéseket és követi az utómunka állapotát.
 
 ## Architektúra és adatfolyam
 
 ```mermaid
 flowchart TD
+    XLSX[GitHubon verziózott welding_catalog.xlsx] --> CAT[Konfiguráció betöltése]
+    CAT --> SIM[Oldalfal-szimulátor]
     OP[Operátor] --> UI[Streamlit élő dashboard]
-    UI --> PUB[Szimulátor / MQTT publisher]
-    PUB -->|welding/events JSON, QoS 1| MQTT[Mosquitto broker]
-    MQTT --> MON[Monitor és eseményellenőrző]
-    MON --> RULES[Teljesség, duplikáció, paraméter, sorrend]
-    RULES --> DB[(SQLite)]
+    UI --> SIM
+    SIM -->|welding/events JSON, QoS 1| MQTT[Mosquitto broker]
+    MQTT --> MON[Monitor és ellenőrző]
+    CAT --> MON
+    MON --> RULES[Modellhez tartozó pontteljesség, duplikáció és paraméterek ellenőrzése]
+    RULES --> DB[(SQLite futásnapló)]
     DB --> UI
     UI -->|Utómunka START / COMPLETE| MQTT
-    MON --> RW[Automatikus utómunka-sor és napló]
+    MON --> RW[Selejt → utómunka-sor]
     RW --> DB
 ```
 
-## MQTT eseménytípusok
+## Konfigurációk és üzenetek
 
-- `body_start`: karosszériaazonosító, típus és az elvárt hegesztési pontok listája. Ebből a felület már az első hegesztés előtt tudja, mely pontokat kell megfigyelni.
-- `weld_result`: karosszériaazonosító, pontazonosító, három szimulált paraméter és időbélyeg.
-- `body_complete`: az elvárt pontlista és a karosszéria lezárása.
-- `rework_action`: kezelői `START` vagy `COMPLETE` művelet, megjegyzéssel. Ez is MQTT-n jut el a monitorhoz.
+A munkafüzet tíz modell–alkatrész konfigurációt tartalmaz: CUPRA Terramar; Audi Q8, Q5, Q3, Q4 e-tron, A6 és A3; Volkswagen Tiguan és ID.4; Škoda Kodiaq. Mindegyik az **Oldalfal (bal)** alkatrészt modellezi, de külön pontazonosítókat, pontszámot, névleges paramétereket és határértékeket használ. Ezek szintetikus oktatási adatok, nem gyártói előírások.
 
-## Ellenőrzési és hibakezelési szabályok
+- `body_start`: konfigurációazonosító és karosszériafutás indítása.
+- `weld_result`: konfigurációazonosító, pontazonosító, áramerősség, hegesztési idő, elektródaerő és időbélyeg.
+- `body_complete`: lezárja az adott oldalfal ellenőrzését. Az elvárt pontlistát a monitor az Excel-katalógusból olvassa, nem a kliens üzenetéből fogadja el igazságforrásként.
+- `rework_action`: operátori `START` vagy `COMPLETE` utómunka-művelet megjegyzéssel.
 
-1. Minden elvárt pontazonosítóhoz legalább egy hegesztési eseménynek kell érkeznie. A lezáráskor hiányzó pontok külön listába kerülnek.
-2. Az ugyanazon karosszériához tartozó ismételt pontazonosító külön eseménysorként marad meg, duplikációként megjelenik, és a karosszéria nem felel meg.
-3. A váratlan pontazonosítókat külön listázza a rendszer.
-4. Az áramerősség, hegesztési idő és elektródaerő a konfigurált, kizárólag demonstrációs határokon belül kell legyen.
-5. A hibás JSON, hiányzó azonosító és ismeretlen eseménytípus a `system_errors` táblába kerül; a dashboardon látható.
-6. A nem megfelelő lezárt karosszéria automatikusan `SELEJT / UTÓMUNKÁRA KÜLDVE` állapotot kap, és egyedi karosszériaazonosítóval bekerül az utómunka-sorba.
-7. Az utómunka `UTÓMUNKÁRA VÁR` → `UTÓMUNKA FOLYAMATBAN` → `UTÓMUNKA ELVÉGEZVE – ÚJRAELLENŐRZÉS SZÜKSÉGES` állapotokban követhető. A lezárás nem minősíti automatikusan megfelelővé a karosszériát.
-8. A dashboard 2 másodpercenként frissül, és mutatja a kiválasztott aktuális karosszéria ponttérképét, legutóbbi paramétereit, történetét, feldolgozási hibáit és utómunkáját.
-9. A monitor a lezáró esemény küldési időbélyege és fogadási ideje alapján késleltetést is rögzít. Ez lokális demonstrációs mérés, nem ipari hálózati minősítés.
+## Ellenőrzés és hibakezelés
+
+1. A kiválasztott Excel-konfiguráció határozza meg az érvényes pontazonosítókat és paraméterhatárokat.
+2. Hiányzó, váratlan vagy többször beérkező pontazonosító külön hibaként megjelenik.
+3. A három mérési paraméter a kiválasztott modell saját határértékei alapján ellenőrződik.
+4. Hibás JSON, ismeretlen eseménytípus, hiányzó azonosító és ismeretlen konfiguráció a `system_errors` naplóba kerül.
+5. Nem megfelelő lezárt oldalfal automatikusan `SELEJT / UTÓMUNKÁRA KÜLDVE` állapotot kap, és bekerül a rework queue-ba.
+6. Utómunka állapotmenet: `UTÓMUNKÁRA VÁR` → `UTÓMUNKA FOLYAMATBAN` → `UTÓMUNKA ELVÉGEZVE – ÚJRAELLENŐRZÉS SZÜKSÉGES`. Ez az utolsó állapot sem minősíti automatikusan megfelelőre a korábbi selejtes darabot.
+7. A dashboard 2 másodpercenként frissül.
 
 ## Tesztterv
 
 | Azonosító | Bemenet | Elvárt eredmény |
 |---|---|---|
-| T01 | Minden pont jelen van, minden paraméter normális | MEGFELELŐ; nincs utómunka-eset |
-| T02 | Egy pont eseménye hiányzik | Selejt; hiányzó ID listázva; automatikus utómunka |
-| T03 | Áramerősség a felső határ felett | Paraméterhiba és automatikus utómunka |
-| T04 | Ugyanaz a pontazonosító kétszer érkezik | Duplikáció jelzése; automatikus utómunka |
-| T05 | Ismeretlen pontazonosító érkezik | Váratlan pont jelzése; selejt |
-| T06 | Ismeretlen eseménytípus érkezik | Feldolgozási hibánapló frissül |
-| T07 | Utómunka START, majd COMPLETE | Állapotátmenet és műveletnapló |
-| T08 | Eltérő hibaarányú több szimuláció | Az eredmények a dashboardon összehasonlíthatók |
+| T01 | Tíz modellkonfiguráció a katalógusban | Pontlisták és határértékek különállók |
+| T02 | Minden szükséges pont megfelelő | MEGFELELŐ; nincs utómunka |
+| T03 | Egy pont hiányzik | Selejt; hiányzó pont listázva; automatikus utómunka |
+| T04 | Ugyanaz a pont kétszer érkezik | Duplikáció; selejt; automatikus utómunka |
+| T05 | Paraméter túllépi a kiválasztott modell határértékét | Paraméterhiba; selejt |
+| T06 | Nem katalógusban szereplő pont érkezik | Váratlan pont; selejt |
+| T07 | Ismeretlen konfiguráció vagy esemény | Feldolgozási hiba naplózva |
+| T08 | Utómunka START, majd COMPLETE | Állapotátmenet és műveleti napló |
 
-A tesztek futtatása:
+Futtatás:
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-## Feltételezések és korlátok
+## Korlátok és feltevések
 
-A paraméterhatárok demonstrációs értékek, nem gyártói előírások. A szimulált paraméterek ellenőrzése nem bizonyítja a valódi hegesztési kötés fizikai szilárdságát vagy minőségét. A folyamatban lévő állapotot a `body_start` esemény, a végleges ellenőrzést a `body_complete` esemény határolja. A mérés reprodukálhatóságához a karosszériatípus, hibaarány, tesztfutás és az alkalmazott verzió dokumentálandó.
+A jármű- és paraméteradatokat oktatási céllal szintetikusan állítottuk elő. Nem szabad tényleges Audi, CUPRA, Volkswagen vagy Škoda gyártási előírásként kezelni őket. A folyamatparaméterek ellenőrzése nem igazolja a fizikai hegesztési kötés minőségét vagy mechanikai szilárdságát. A referencia-konfigurációk forrása az Excel, a DB csak a futás eredményeit és eseményeit rögzíti.
