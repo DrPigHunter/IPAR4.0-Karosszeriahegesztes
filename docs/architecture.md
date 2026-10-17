@@ -61,7 +61,7 @@ A GitHubon tárolt, két munkalapos Excel-munkafüzet tíz modell–alkatrész k
 
 - A dashboard induláskor **nem indít automatikusan gyártást**. Az operátor beállíthatja a hibaarányt, a hibamódot és a 100–10 000%-os sebességet, majd külön gombbal indíthat.
 - A 100%-os sebesség a 90 ms-os pontküldési alapvárakozást és a 10 másodperces ciklusok közötti szünetet jelenti. A nagyobb sebesség ezeket a várakozásokat csökkenti; nem ígér ugyanekkora tényleges gyorsulást.
-- A publisher a QoS 1 üzeneteket sorrendben sorba állítja, miközben a hálózati hurok kezeli a visszaigazolásokat. A ciklus vége előtt a visszaigazolásokat ellenőrzi, összesített időkorláttal.
+- A publisher a QoS 1 üzeneteket sorrendben sorba állítja, miközben a hálózati hurok kezeli a visszaigazolásokat. A ciklus vége előtt a visszaigazolásokat ellenőrzi, összesített időkorláttal. A dashboard a publish után az SQLite-ban megvárja a karosszéria végleges minősítését. Ha a monitor 30 másodperc alatt nem véglegesít, az automatika leállítja az új ciklusok indítását, és hibát ír a naplóba; ezzel megelőzi a feldolgozatlan üzenetek korlátlan felhalmozását.
 - A jobb felső kijelentkezés először dátumozott Excel-pillanatképet ment, és nem vár arra, hogy a gyártási szál magától leálljon. Ha a szál befejeződik, a munkafüzet a legfrissebb mentett adatokkal frissül.
 - Az SQLite adatbázis, a ciklusonkénti JSON, a napi JSONL és az alkalmazás/konzolnaplók külön rétegek. A napló- és Excel-export nem helyettesíti a folyamatos SQLite-mentést.
 
@@ -81,6 +81,8 @@ A GitHubon tárolt, két munkalapos Excel-munkafüzet tíz modell–alkatrész k
 | T10 | MQTT-küldés sebességtesztje | Az események sorrendben sorba állnak, QoS 1 visszaigazolások ellenőrzöttek |
 | T11 | Excel-jelentés létrehozása | Összes adatlap megvan, az üres adatbázis is kezelhető |
 | T12 | Két jelentés ugyanabban a másodpercben | A fájlnevek nem írják felül egymást |
+| T13 | A monitor késve véglegesíti a karosszériát | Az automatika vár a DB-státuszra, időtúllépéskor biztonságosan leáll |
+| T14 | Túlméretes Excel-adattábla | Több számozott munkalap; minden sor megőrizve |
 
 Futtatás:
 
