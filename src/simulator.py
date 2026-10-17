@@ -119,26 +119,45 @@ def generate_body_events(
 def publish_events(
     events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: float = 90.0
 ) -> None:
-    """Publish events in order with fresh send timestamps and MQTT QoS 1.
+    """Publish ordered events with QoS 1 acknowledgements checked after enqueueing.
 
-    At 90 ms per measurement, the largest configured sidewall completes in
-    roughly 13 seconds, leaving margin under the 20-second cycle target.
+    At 100%, the inter-message pause is the original 90 ms. At higher speeds,
+    waiting for each QoS 1 acknowledgement before publishing the next message
+    would serialize network round trips and defeat speed scaling. Paho keeps
+    its network loop active while messages are queued and acknowledged.
     """
     if delay_ms < 0:
         raise ValueError("A delay_ms nem lehet negatív.")
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"welding-publisher-{uuid.uuid4().hex[:8]}")
+    # Configure before connect; 100-150 event cycles can be in flight/queued.
+    client.max_inflight_messages_set(1000)
+    client.max_queued_messages_set(0)  # 0 means unbounded queue in Paho.
     client.connect(host, port, keepalive=30)
     client.loop_start()
+    pending = []
     try:
         for event in events:
             outbound = dict(event)
             outbound["timestamp"] = utc_now()
             info = client.publish(EVENT_TOPIC, json.dumps(outbound, ensure_ascii=False), qos=1)
-            info.wait_for_publish(timeout=5)
-            if info.rc != mqtt.MQTT_ERR_SUCCESS or not info.is_published():
-                raise RuntimeError(f"MQTT publikálási hiba: {info.rc}")
+            if info.rc != mqtt.MQTT_ERR_SUCCESS:
+                raise RuntimeError(f"MQTT publikálási hiba a sorba állításkor: {info.rc}")
+            pending.append(info)
             if delay_ms > 0:
                 time.sleep(delay_ms / 1000)
+
+        # Use one overall timeout budget rather than giving each point a new 5 s.
+        deadline = time.monotonic() + max(5.0, len(pending) * delay_ms / 1000.0 + 5.0)
+        for info in pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Az MQTT-események visszaigazolása túllépte a ciklus időkorlátját.")
+            try:
+                info.wait_for_publish(timeout=remaining)
+            except RuntimeError as exc:
+                raise RuntimeError(f"MQTT publikálási visszaigazolás nem érkezett meg: {exc}") from exc
+            if info.rc != mqtt.MQTT_ERR_SUCCESS or not info.is_published():
+                raise RuntimeError(f"MQTT publikálási hiba: {info.rc}")
     finally:
         client.loop_stop()
         client.disconnect()
