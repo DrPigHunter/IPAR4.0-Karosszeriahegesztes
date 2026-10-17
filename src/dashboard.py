@@ -183,6 +183,7 @@ def log_tool_replacement(
     details = {
         **change,
         "replacement_interval_bodies": int(interval_bodies),
+        "replacement_component": "welding_head_electrode_assembly",
         "new_tool_wear_starts_at_percent": 0.0,
         "execution_window": execution_window,
         "simulated_change_duration_seconds": round(float(simulated_duration_seconds), 3),
@@ -1130,10 +1131,10 @@ def render_production_tab() -> None:
         st.caption(f"Utolsó pont állapota: {wear_payloads[-1].get('wear_quality_status', '—')} · "
                    f"szimulált minőségi mutató: {wear_payloads[-1].get('simulated_quality_index_percent', '—')}%")
     st.caption(
-        f"Aktuális eszköz: #{int(wear_state.get('current_tool_number', 1))} · "
+        f"Aktuális hegesztőfej-/elektródaegység: #{int(wear_state.get('current_tool_number', 1))} · "
         f"elkészült karosszériák az eszközzel: {int(wear_state.get('bodies_since_tool_change', 0))} / "
         f"{int(auto_state.get('tool_change_interval_bodies', DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))} · "
-        f"eddigi eszközcserék: {int(wear_state.get('tool_change_count', 0))}"
+        f"eddigi fej-/elektródaegység-cserék: {int(wear_state.get('tool_change_count', 0))}"
     )
 
     latest = body_events.iloc[-1] if not body_events.empty else None
