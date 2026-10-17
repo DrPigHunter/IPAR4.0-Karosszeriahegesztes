@@ -242,6 +242,12 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertTrue(all(e["cooling_alerts"] for e in points))
         self.assertTrue(all(e["cooling_stress_factor"] > 1.0 for e in points))
 
+    def test_outlet_temperature_below_inlet_is_flagged_for_sensor_review(self):
+        result = cooling_condition(6.0, coolant_inlet_temp_c=25.0, coolant_outlet_temp_c=18.0)
+        self.assertTrue(any("hidegebb a belépőnél" in alert for alert in result["alerts"]))
+        # The inconsistency is flagged; the heuristic does not claim a physical temperature model.
+        self.assertGreaterEqual(result["wear_stress_factor"], 1.0)
+
     def test_invalid_cooling_values_are_rejected(self):
         with self.assertRaises(ValueError):
             cooling_condition(-1.0, 20.0, 30.0)
