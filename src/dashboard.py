@@ -69,7 +69,7 @@ st.markdown(
       .reading { display:flex; justify-content:space-between; gap:.7rem; align-items:center; border:1px solid var(--line); background:#fff; border-radius:12px; padding:.62rem .8rem; min-height:58px; }
       .reading-label { font-size:.7rem; color:var(--muted); }
       .reading-value { margin-top:.15rem; font:700 1.05rem 'Space Grotesk',sans-serif; color:var(--ink); }
-      .spot-grid { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:4px; padding:.6rem; border:1px solid var(--line); border-radius:14px; background:#fff; }
+      .spot-grid { display:grid; grid-template-columns:repeat(16,minmax(0,1fr)); gap:4px; padding:.6rem; border:1px solid var(--line); border-radius:14px; background:#fff; }
       .spot { display:flex; align-items:center; justify-content:center; height:22px; min-width:0; border-radius:5px; font-size:.65rem; font-weight:700; letter-spacing:-.02em; }
       .spot-ok { color:#08785f; background:#dff7ed; }
       .spot-wait { color:#7a899e; background:#edf1f6; }
