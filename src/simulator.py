@@ -1,4 +1,4 @@
-"""Simulate a welding cycle from the GitHub-versioned XLSX catalogue and publish via MQTT."""
+"""Generate XLSX-based welding measurements with controllable per-point variations."""
 from __future__ import annotations
 
 import argparse
@@ -17,17 +17,66 @@ BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
 EVENT_TOPIC = "welding/events"
 
+FAULT_MODES = ("within_limits", "outside_limits")
+MAX_FAULT_PROBABILITY = 0.001  # 0.1% per welding point
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _apply_point_variation(
+    event: dict[str, Any],
+    limits: Any,
+    rng: random.Random,
+    mode: str,
+) -> None:
+    """Vary one measurement either just inside limits or just outside by one resolution step."""
+    choices = {
+        "current_ka": (limits.current_min, limits.current_max, 0.01, 2),
+        "weld_time_ms": (limits.weld_time_min, limits.weld_time_max, 0.1, 1),
+        "electrode_force_kn": (limits.force_min, limits.force_max, 0.01, 2),
+    }
+    key = rng.choice(list(choices))
+    lower, upper, resolution, digits = choices[key]
+    go_high = rng.choice([True, False])
+
+    if mode == "within_limits":
+        # Move near the chosen edge, but never across it. That result must pass validation.
+        value = upper - resolution if go_high else lower + resolution
+        value = round(value, digits)
+        value = min(upper, max(lower, value))
+        event[key] = value
+        event["simulated_variation"] = "WITHIN_ACCEPTED_LIMITS"
+    elif mode == "outside_limits":
+        # A deliberately small one-step violation, so the monitor catches a real boundary breach.
+        value = upper + resolution if go_high else lower - resolution
+        event[key] = round(value, digits)
+        event["simulated_variation"] = "OUTSIDE_ACCEPTED_LIMITS"
+    else:
+        raise ValueError(
+            f"Ismeretlen hibamód: {mode!r}. Választható: {', '.join(FAULT_MODES)}"
+        )
+
+
 def generate_body_events(
-    config_id: str, fault_rate: float = 0.0, seed: int | None = None
+    config_id: str,
+    fault_rate: float = 0.0,
+    seed: int | None = None,
+    fault_mode: str = "within_limits",
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Generate a cycle using expected IDs, per-point nominal values, and limits from XLSX."""
-    if not 0 <= fault_rate <= 1:
-        raise ValueError("A fault_rate értékének 0 és 1 között kell lennie.")
+    """Generate a complete cycle; fault_rate is a probability per individual weld point.
+
+    A value of 0.001 means 0.1% per point. In within_limits mode, selected
+    measurements move close to an accepted limit, so the body stays compliant.
+    In outside_limits mode, selected measurements exceed one limit by one
+    measurement-resolution step and should be sent to rework.
+    """
+    if not 0 <= fault_rate <= MAX_FAULT_PROBABILITY:
+        raise ValueError("A pontonkénti hibavalószínűség 0 és 0.001 között lehet (0–0,1%).")
+    if fault_mode not in FAULT_MODES:
+        raise ValueError(f"Ismeretlen hibamód: {fault_mode!r}")
+
     config = get_configuration(config_id)
     rng = random.Random(seed)
     body_id = f"BODY-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
@@ -43,9 +92,9 @@ def generate_body_events(
     }]
 
     for point in config["points"]:
-        if rng.random() < fault_rate * 0.35:
-            continue  # Simulated lost weld-result event.
-        # Normal values are derived from the point's Excel nominal recipe with modest noise.
+        # Regular measurements have small natural-looking noise and are clamped inside
+        # the model-specific acceptable range. No drop/duplicate/unexpected events are
+        # injected by the per-point probability control.
         event: dict[str, Any] = {
             **common, "event_type": "weld_result", "weld_id": point["weld_id"],
             "current_ka": round(max(limits.current_min, min(limits.current_max,
@@ -56,26 +105,9 @@ def generate_body_events(
                 point["nominal_electrode_force_kn"] + rng.uniform(-0.04, 0.04))), 2),
             "timestamp": utc_now(),
         }
-        if rng.random() < fault_rate:
-            key = rng.choice(["current_ka", "weld_time_ms", "electrode_force_kn"])
-            event[key] = {
-                "current_ka": limits.current_max + 2.0,
-                "weld_time_ms": limits.weld_time_max + 60.0,
-                "electrode_force_kn": limits.force_max + 1.0,
-            }[key]
+        if fault_rate > 0 and rng.random() < fault_rate:
+            _apply_point_variation(event, limits, rng, fault_mode)
         events.append(event)
-
-        if rng.random() < fault_rate * 0.25:
-            duplicate = dict(event)
-            duplicate["timestamp"] = utc_now()
-            duplicate["duplicate_simulated"] = True
-            events.append(duplicate)
-
-        if rng.random() < fault_rate * 0.08:
-            events.append({
-                **event, "weld_id": f"X{rng.randint(1, 999):03d}",
-                "timestamp": utc_now(), "unexpected_simulated": True,
-            })
 
     events.append({
         **common, "event_type": "body_complete", "expected_weld_ids": expected_ids,
@@ -85,12 +117,12 @@ def generate_body_events(
 
 
 def publish_events(
-    events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: int = 8
+    events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: int = 90
 ) -> None:
     """Publish events in order with fresh send timestamps and MQTT QoS 1.
 
-    A 90 ms spacing approximates a visible welding cadence while keeping each
-    115–142 point simulated sidewall safely below the 20-second cycle target.
+    At 90 ms per measurement, the largest configured sidewall completes in
+    roughly 13 seconds, leaving margin under the 20-second cycle target.
     """
     if delay_ms < 0:
         raise ValueError("A delay_ms nem lehet negatív.")
@@ -115,18 +147,20 @@ def publish_events(
 def main() -> None:
     configs = list_configurations()
     labels = {cfg["config_id"]: cfg["label"] for cfg in configs}
-    parser = argparse.ArgumentParser(description="Excel katalógus alapú karosszéria-/alkatrész-hegesztés szimulátor")
+    parser = argparse.ArgumentParser(description="Excel-katalógus alapú oldalfal-hegesztési szimulátor")
     parser.add_argument("--config-id", choices=sorted(labels), default=configs[0]["config_id"])
-    parser.add_argument("--fault-rate", type=float, default=0.0, help="Szimulált hibák valószínűsége (0..1; alapérték: 0 = hibainjektálás kikapcsolva)")
+    parser.add_argument("--fault-rate", type=float, default=0.0,
+                        help="Pontonkénti hibavalószínűség (0..0.001, vagyis 0..0.1%%; alapérték 0)")
+    parser.add_argument("--fault-mode", choices=FAULT_MODES, default="within_limits")
     parser.add_argument("--host", default=BROKER_HOST)
     parser.add_argument("--port", type=int, default=BROKER_PORT)
     parser.add_argument("--delay-ms", type=int, default=90)
     args = parser.parse_args()
-    body_id, events = generate_body_events(args.config_id, args.fault_rate)
+    body_id, events = generate_body_events(args.config_id, args.fault_rate, fault_mode=args.fault_mode)
     publish_events(events, args.host, args.port, args.delay_ms)
     weld_events = sum(event.get("event_type") == "weld_result" for event in events)
-    print(f"Elküldve: {body_id} | {labels[args.config_id]} | {weld_events} hegesztési üzenet + indító és lezáró esemény")
-
+    print(f"Elküldve: {body_id} | {labels[args.config_id]} | {weld_events} hegesztési üzenet")
+    
 
 if __name__ == "__main__":
     main()
