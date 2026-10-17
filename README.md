@@ -42,9 +42,11 @@ Egy harmadik ablakban:
 
 - **Élő gyártás:** kompakt állapotjelzők, aktuális karosszéria, pontteljesség és színkódolt ponttérkép görgethető, hosszú mérési táblázat nélkül.
 - **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények, mérési napló, hibanapló és utómunka-kezelés.
-- **Automatizálás:** a 10 modellből a rendszer automatikusan választ; új karosszériát 5 másodperces indítási időközzel küld a szimulációba.
-- **Hibavalószínűség:** alapértelmezetten 0 (nincs automatikusan injektált hiba). A statisztika fülön demonstrációs hibateszthez állítható.
-- **Utómunka:** a hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont továbbra is hibának számít, és automatikusan utómunka-sorba kerül.
+- **Automatizálás:** a 10 modellből a rendszer automatikusan választ. Egy hegesztési ciklus után 10 másodpercet vár a következő karosszéria indításáig; 90 ms-os pontköz mellett a 142 pontos oldal célideje 20 másodperc alatt van.
+- **Pontonkénti eltérésvalószínűség:** a Statisztika és utómunka fülön 0,000–0,100% között állítható, 0,001 százalékpontos lépésekkel. A 0,000% kikapcsol minden mesterséges eltérést.
+- **Eltérési mód:** választható elfogadott tartományon belüli változtatás (megfelelő marad), vagy a határértéket egy mérési lépéssel átlépő hiba (utómunka).
+- **Utómunka:** a ténylegesen hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont hibának számít, és automatikusan utómunka-sorba kerül.
+- **Statisztika:** az aktuális dashboard-folyamat új futásait külön számolja; a korábbi futások megmaradnak az előzményekben, így régi selejtek nem torzítják az új menet mérőszámait.
 
 ## Excel-katalógus
 
