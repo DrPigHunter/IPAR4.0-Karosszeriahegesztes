@@ -12,6 +12,15 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from src.wear_control import (
+    COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    COOLANT_INLET_TARGET_MAX_C,
+    COOLANT_OUTLET_TARGET_MAX_C,
+    DEFAULT_TOOL_CHANGE_DURATION_SECONDS,
+    DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    DEFAULT_WEAR_PER_POINT_PERCENT,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT / "data" / "welding.db"
 DEFAULT_LOG_DIR = ROOT / "logs"
@@ -380,14 +389,14 @@ def export_production_report(
     export_timestamp: datetime | None = None,
     speed_percent: float = 100.0,
     wear_enabled: bool = True,
-    wear_per_point_percent: float = 0.03,
+    wear_per_point_percent: float = DEFAULT_WEAR_PER_POINT_PERCENT,
     auto_correct_wear: bool = True,
     auto_tool_change_enabled: bool = True,
-    tool_change_interval_bodies: int = 100,
-    tool_change_duration_seconds: float = 5.0,
-    coolant_flow_l_min: float = 6.0,
-    coolant_inlet_temp_c: float = 20.0,
-    coolant_outlet_temp_c: float = 30.0,
+    tool_change_interval_bodies: int = DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    tool_change_duration_seconds: float = DEFAULT_TOOL_CHANGE_DURATION_SECONDS,
+    coolant_flow_l_min: float = COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    coolant_inlet_temp_c: float = COOLANT_INLET_TARGET_MAX_C,
+    coolant_outlet_temp_c: float = COOLANT_OUTLET_TARGET_MAX_C,
 ) -> tuple[Path, bytes, dict[str, Any]]:
     """Write a dated Excel report to disk and return its bytes for browser download."""
     now = export_timestamp or datetime.now().astimezone()
