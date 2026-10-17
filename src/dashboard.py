@@ -824,7 +824,7 @@ def render_production_tab() -> None:
         unsafe_allow_html=True,
     )
     if auto_state.get("error"):
-        st.warning(f"MQTT-küldési hiba: {auto_state['error']} — ellenőrizd, hogy fut-e a Docker Desktop és a monitor.")
+        st.warning(f"Gyártási hiba: {auto_state['error']} — az automatika biztonsági okból leáll. Ellenőrizd a Docker Desktopot, az MQTT-brokert és a monitort, majd indítsd újra.")
     st.progress(progress, text=f"Pontteljesség  {len(seen.intersection(config['expected_weld_ids']))} / {expected}  ·  {progress:.0%}")
     duration_value = current_row.get("duration_seconds") if current_row is not None else None
     if duration_value is not None and pd.notna(duration_value):
