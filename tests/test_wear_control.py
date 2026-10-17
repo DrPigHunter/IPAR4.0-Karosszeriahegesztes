@@ -29,6 +29,7 @@ class ElectrodeWearTests(unittest.TestCase):
             CONFIG["config_id"],
             fault_rate=0.0,
             seed=27,
+            non_wear_defect_probability=0.0,
             wear_state=state,
             wear_per_point_percent=0.0,
             wear_enabled=True,
@@ -46,6 +47,24 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertTrue(all(limits.weld_time_min <= event["weld_time_ms"] <= limits.weld_time_max
                             for event in points))
         self.assertTrue(all(event["process_quality_ok"] for event in points))
+
+    def test_background_non_wear_defect_is_not_hidden_by_controller(self):
+        point = CONFIG["points"][0]
+        event = {
+            "event_type": "weld_result",
+            "weld_id": point["weld_id"],
+            "current_ka": CONFIG["limits"].current_max + 0.01,
+            "weld_time_ms": point["nominal_weld_time_ms"],
+            "electrode_force_kn": point["nominal_electrode_force_kn"],
+            "simulated_variation": "BACKGROUND_PROCESS_DEFECT",
+            "non_wear_process_defect": True,
+        }
+        apply_electrode_wear(
+            [event], CONFIG, {"wear_percent": 0.0},
+            wear_per_point_percent=0.0, wear_enabled=True, auto_correct=True,
+        )
+        self.assertGreater(event["current_ka"], CONFIG["limits"].current_max)
+        self.assertEqual(event["auto_correction_steps"], 0)
 
     def test_deliberately_injected_limit_fault_is_not_hidden_by_controller(self):
         point = CONFIG["points"][0]
@@ -68,12 +87,12 @@ class ElectrodeWearTests(unittest.TestCase):
     def test_wear_accumulates_between_calls(self):
         state = {}
         _, first = generate_body_events(
-            CONFIG["config_id"], seed=7, wear_state=state,
+            CONFIG["config_id"], seed=7, wear_state=state, non_wear_defect_probability=0.0,
             wear_enabled=True, auto_correct_wear=False, wear_per_point_percent=0.02,
         )
         first_wear = state["wear_percent"]
         _, second = generate_body_events(
-            CONFIG["config_id"], seed=8, wear_state=state,
+            CONFIG["config_id"], seed=8, wear_state=state, non_wear_defect_probability=0.0,
             wear_enabled=True, auto_correct_wear=False, wear_per_point_percent=0.02,
         )
         self.assertGreater(first_wear, 0.0)
@@ -82,9 +101,10 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertTrue(all(e["electrode_wear_enabled"] for e in second_points))
 
     def test_disabled_wear_does_not_change_quality_or_measurements(self):
-        base_id, base_events = generate_body_events(CONFIG["config_id"], seed=99)
+        base_id, base_events = generate_body_events(CONFIG["config_id"], seed=99, non_wear_defect_probability=0.0)
         _, wear_events = generate_body_events(
             CONFIG["config_id"], seed=99, wear_state={"wear_percent": 80.0},
+            non_wear_defect_probability=0.0,
             wear_enabled=False, auto_correct_wear=True, wear_per_point_percent=0.03,
         )
         base_points = [e for e in base_events if e.get("event_type") == "weld_result"]
@@ -98,7 +118,7 @@ class ElectrodeWearTests(unittest.TestCase):
     def test_uncorrectable_wear_quality_is_detected_and_routed_to_rework(self):
         state = {"wear_percent": 100.0}
         body_id, events = generate_body_events(
-            CONFIG["config_id"], seed=12, wear_state=state,
+            CONFIG["config_id"], seed=12, wear_state=state, non_wear_defect_probability=0.0,
             wear_enabled=True, auto_correct_wear=False, wear_per_point_percent=0.0,
         )
         points = [e for e in events if e.get("event_type") == "weld_result"]
@@ -233,7 +253,7 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertGreater(poor["wear_stress_factor"], 1.0)
 
         _, events = generate_body_events(
-            CONFIG["config_id"], seed=321, wear_state={},
+            CONFIG["config_id"], seed=321, wear_state={}, non_wear_defect_probability=0.0,
             wear_enabled=True, auto_correct_wear=False,
             wear_per_point_percent=DEFAULT_WEAR_PER_POINT_PERCENT,
             coolant_flow_l_min=3.0, coolant_inlet_temp_c=25.0, coolant_outlet_temp_c=35.0,
