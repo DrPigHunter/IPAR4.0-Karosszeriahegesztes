@@ -34,6 +34,7 @@ from src.speed_control import (
     DEFAULT_SPEED_PERCENT, MAX_SPEED_PERCENT, MIN_SPEED_PERCENT,
     normalize_speed_percent, scaled_inter_body_pause_seconds, scaled_publish_delay_ms,
 )
+from src.monitor_wait import MonitorCompletionTimeout, wait_for_body_completion
 
 BETWEEN_BODIES_PAUSE_SECONDS = 10.0
 PUBLISH_DELAY_MS = 90  # milliseconds per weld result; 142 points take about 13 seconds
@@ -185,10 +186,14 @@ def automatic_production_worker(
                 "generated_event_count": len(events),
             })
             simulator_module.publish_events(events, delay_ms=publish_delay_ms)
+            # Broker PUBACK only confirms broker receipt. Wait until the monitor has
+            # committed the final quality status, so we don't outrun SQLite at high speed.
+            monitor_result = wait_for_body_completion(body_id, DB_PATH, timeout_seconds=30.0)
             elapsed = round(time.monotonic() - cycle_started, 3)
             state["completed_cycles"] = int(state.get("completed_cycles", 0)) + 1
             state["last_sent_body_id"] = body_id
-            safe_application_log("body_cycle_published", {
+            state["last_monitor_status"] = monitor_result["status"]
+            safe_application_log("body_cycle_completed", {
                 "body_id": body_id,
                 "config_id": config_id,
                 "fault_rate_percent": round(fault_rate * 100.0, 3),
@@ -197,7 +202,9 @@ def automatic_production_worker(
                 "effective_publish_delay_ms": round(publish_delay_ms, 4),
                 "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "generated_event_count": len(events),
-                "publish_duration_seconds": elapsed,
+                "end_to_end_cycle_seconds": elapsed,
+                "monitor_status": monitor_result["status"],
+                "monitor_database_cycle_seconds": monitor_result.get("duration_seconds"),
                 "within_20_second_target": elapsed < 20.0,
             })
         except Exception as exc:
@@ -209,6 +216,10 @@ def automatic_production_worker(
                     f"Részlet: {detail}"
                 )
             state["error"] = detail
+            if isinstance(exc, MonitorCompletionTimeout):
+                # A broker can accept messages while the consumer is stuck. Stop
+                # rather than flooding a monitor that has not finalized this body.
+                stop_event.set()
             safe_application_log("body_cycle_failed", {
                 "body_id": body_id,
                 "config_id": config_id,
@@ -218,6 +229,7 @@ def automatic_production_worker(
                 "effective_publish_delay_ms": round(publish_delay_ms, 4),
                 "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "error": detail,
+                "monitor_completion_timeout": isinstance(exc, MonitorCompletionTimeout),
                 "elapsed_seconds": round(time.monotonic() - cycle_started, 3),
             }, level="ERROR")
         # A full cycle must finish before the separate 10-second inter-body pause begins.
