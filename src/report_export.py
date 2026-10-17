@@ -248,6 +248,30 @@ def _excel_safe(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+EXCEL_MAX_ROWS = 1_048_576
+EXCEL_MAX_DATA_ROWS = EXCEL_MAX_ROWS - 1  # reserve row 1 for column headings
+
+
+def split_long_sheets(
+    sheets: dict[str, pd.DataFrame],
+    max_data_rows: int = EXCEL_MAX_DATA_ROWS,
+) -> dict[str, pd.DataFrame]:
+    """Split dataframes into Excel-safe worksheets without dropping any rows."""
+    if max_data_rows < 1 or max_data_rows >= EXCEL_MAX_ROWS:
+        raise ValueError(f"max_data_rows must be from 1 to {EXCEL_MAX_DATA_ROWS}")
+    expanded: dict[str, pd.DataFrame] = {}
+    for sheet_name, frame in sheets.items():
+        if len(frame) <= max_data_rows:
+            expanded[sheet_name] = frame
+            continue
+        part_count = (len(frame) + max_data_rows - 1) // max_data_rows
+        for part_index, start in enumerate(range(0, len(frame), max_data_rows), start=1):
+            suffix = f" {part_index}"
+            safe_name = f"{sheet_name[:31 - len(suffix)]}{suffix}"
+            expanded[safe_name] = frame.iloc[start:start + max_data_rows].copy()
+    return expanded
+
+
 def export_production_report(
     session_started_at: float | None,
     fault_rate_percent: float,
@@ -301,8 +325,9 @@ def export_production_report(
     }
 
     temp = target.with_suffix(".tmp.xlsx")
+    safe_sheets = split_long_sheets(sheets)
     with pd.ExcelWriter(temp, engine="openpyxl") as writer:
-        for sheet_name, frame in sheets.items():
+        for sheet_name, frame in safe_sheets.items():
             safe_frame = _excel_safe(frame)
             if safe_frame.empty and len(safe_frame.columns) == 0:
                 safe_frame = pd.DataFrame({"Információ": ["Nincs rögzített adat."]})
@@ -316,14 +341,17 @@ def export_production_report(
                 cell.fill = PatternFill("solid", fgColor="2457D6")
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
             worksheet.row_dimensions[1].height = 30
-            for column_cells in worksheet.iter_cols():
-                column_index = column_cells[0].column
+            # Only scan a small prefix to estimate widths. Iterating all cells here
+            # would be expensive for long-running high-speed simulations with huge logs.
+            sample_rows = min(250, worksheet.max_row)
+            for column_index in range(1, worksheet.max_column + 1):
                 max_len = 10
-                for cell in column_cells[:250]:
-                    value = "" if cell.value is None else str(cell.value)
-                    max_len = max(max_len, min(len(value), 52))
-                    if cell.row > 1:
-                        cell.alignment = Alignment(vertical="top", wrap_text=False)
+                for row_index in range(1, sample_rows + 1):
+                    value = worksheet.cell(row=row_index, column=column_index).value
+                    text_value = "" if value is None else str(value)
+                    max_len = max(max_len, min(len(text_value), 52))
+                    if row_index > 1:
+                        worksheet.cell(row=row_index, column=column_index).alignment = Alignment(vertical="top", wrap_text=False)
                 worksheet.column_dimensions[get_column_letter(column_index)].width = min(max_len + 2, 48)
     os.replace(temp, target)
     return target, target.read_bytes(), info
