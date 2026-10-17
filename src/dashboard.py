@@ -580,6 +580,8 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
     wear_enabled = bool(state.get("wear_enabled", True))
     wear_per_point_percent = float(state.get("wear_per_point_percent", 0.03))
     auto_correct_wear = bool(state.get("auto_correct_wear", True))
+    auto_tool_change_enabled = bool(state.get("auto_tool_change_enabled", True))
+    tool_change_interval_bodies = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
     session_started_at = st.session_state.get("app_session_started_at")
     export_time = datetime.now().astimezone()
 
@@ -591,6 +593,8 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
             "electrode_wear_enabled": wear_enabled,
             "wear_per_point_percent": wear_per_point_percent,
             "auto_correct_wear": auto_correct_wear,
+            "auto_tool_change_enabled": auto_tool_change_enabled,
+            "tool_change_interval_bodies": tool_change_interval_bodies,
             "worker_was_alive": bool(worker is not None and worker.is_alive()),
         })
         if stop_event is not None:
@@ -612,6 +616,8 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
         wear_per_point_percent=wear_per_point_percent,
 
         auto_correct_wear=auto_correct_wear,
+        auto_tool_change_enabled=auto_tool_change_enabled,
+        tool_change_interval_bodies=tool_change_interval_bodies,
         db_path=DB_PATH,
         log_dir=ROOT / "logs",
         export_timestamp=export_time,
@@ -652,6 +658,8 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
             wear_per_point_percent=wear_per_point_percent,
 
             auto_correct_wear=auto_correct_wear,
+            auto_tool_change_enabled=auto_tool_change_enabled,
+            tool_change_interval_bodies=tool_change_interval_bodies,
             db_path=DB_PATH,
             log_dir=ROOT / "logs",
             export_timestamp=export_time,
