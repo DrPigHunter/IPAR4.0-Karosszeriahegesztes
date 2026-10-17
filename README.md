@@ -99,16 +99,16 @@ A jelentés munkalapjai többek között:
 - `Modellenként`: modellenkénti minőségi eredmények és időadatok.
 - `Karosszériák` és `Hegesztési adatok`: **az összes elérhető SQLite-rekord**, nem csupán a képernyőn látható sorok.
 - `Utómunka sor`, `Utómunka műveletek`, `Rendszerhibák`: utómunka- és hibabejegyzések.
-- `Futásnaplók`, `Napi JSONL`, `Alkalmazás-napló`: per-karosszéria és operátori/programnaplók.
-- `Beállítások`: a jelentéskészítéskor kiválasztott hibaarány és hibamód.
+- `Futásnaplók`, `Napi JSONL`, `Összesített JSON`, `Alkalmazás-napló`, `Konzolnapló`: ciklus- és programnaplók.
+- `Beállítások`: a jelentéskészítéskor kiválasztott hibaarány, hibamód és sebesség.
 
 A **Napló és export** fül az adatbázis összes karosszéria-, hegesztési pont-, utómunka- és rendszerhiba-bejegyzését, a JSON/JSONL naplókat, az alkalmazásnaplót, a monitor/dashboard konzolnaplókat és a már mentett Excel-exportok listáját jeleníti meg. A gombnyomások, hibabeállítás-változások, karosszériánként használt hibaarányok, ciklusidők és indítási/leállítási kérések napi alkalmazásnaplóba íródnak. Az indítószkript a monitor és a dashboard kimenetét is a logs/monitor.log és logs/dashboard.log fájlokba irányítja. A mérési adatok SQLite-ban, a lezárt ciklusok JSON/JSONL-fájlokban folyamatosan megmaradnak akkor is, ha a kezelőfelület váratlanul bezáródik.
 
-Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉÉÉ-HH-NN_ÓÓ-PP-MP.xlsx`.
+Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉÉÉ-HH-NN_ÓÓ-PP-MP_mikromásodperc.xlsx`.
 
 
 ## Tesztek futtatása
 
     python -m unittest discover -s tests -v
 
-A tesztek ellenőrzik a katalógus szerkezetét és pontszámait, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, valamint az automatikus utómunka-kezelést.
+A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést és a teljes Excel-exportot.
