@@ -88,7 +88,7 @@ class MonitorIntegrationTests(unittest.TestCase):
     def test_fault_free_cycles_for_all_models_pass_without_rework(self):
         configs = list_configurations()
         for config in configs:
-            body_id, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=123)
+            body_id, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=123, non_wear_defect_probability=0.0)
             for event in events:
                 process_event(self.conn, event)
             row = self.conn.execute(
