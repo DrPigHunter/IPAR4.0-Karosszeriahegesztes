@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 
 from src.catalog import list_configurations
 from src.parameter_audit import build_parameter_audit
+from src.factory_settings import DEFAULT_NON_WEAR_DEFECT_PROBABILITY
 from src.wear_control import (
     COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     COOLANT_INLET_TARGET_MAX_C,
@@ -381,7 +382,28 @@ def _make_sources_frame() -> pd.DataFrame:
             "Korlát": "A projekt nem szolgáltat univerzális X-karosszéria csereintervallumot; a jelenlegi 100-as érték demó-alapérték.",
         },
         {
-            "Forrás / kiadó": "Projektmérnöki megjegyzés",
+            "Forrás / kiadó": "TWI – Ensuring quality and consistency of resistance spot welds",
+            "Felhasznált állítás": "A minőséget többek között az anyagminőség, felületi szennyeződés/bevonat, illeszkedés, elektróda-beállítás, elektródaerő és hegesztési idő befolyásolja.",
+            "Projektbeli szerep": "A kopástól független folyamat-hibamódok lehetőségének forrása.",
+            "URL": "https://www.twi-global.com/technical-knowledge/faqs/faq-what-must-be-done-to-ensure-the-quality-and-consistency-of-resistance-spot-welds",
+            "Korlát": "A forrás nem ad minden gyártósorra érvényes, univerzális százalékos hibaarányt.",
+        },
+        {
+            "Forrás / kiadó": "Liu et al. – Welding Defects Occurrence and Their Effects on Weld Quality in Resistance Spot Welding of AHSS Steel (ISIJ International, 2014)",
+            "Felhasznált állítás": "A DP600 vizsgálat az elektródaerő, hegesztőáram és hegesztési idő kapcsolatát vizsgálja a hibákkal metallográfiai és szakító-nyíró tesztekkel.",
+            "Projektbeli szerep": "Alátámasztja, hogy a hegesztési hibák nem csak elektródakopásból származhatnak.",
+            "URL": "https://www.jstage.jst.go.jp/article/isijinternational/54/8/54_1883/_html/-char/en",
+            "Korlát": "Konkrét anyag és vizsgálati beállítás; nem univerzális sorozatgyártási hibaszázalék.",
+        },
+        {
+            "Forrás / kiadó": "Projektmérnöki megjegyzés – szimulációs hibakockázat",
+            "Felhasznált állítás": "0,01% kopástól független hiba/hegesztési pont (1:10 000); kb. 1,17–1,41% esély legalább egy eseményre egy 118–142 pontos oldalfalon.",
+            "Projektbeli szerep": "Ritka, a kopási állapottól független folyamat-hiba demonstrációja és elutasított darabok/utómunka útvonal tesztelése.",
+            "URL": "docs/parameter_realism_audit.md",
+            "Korlát": "Kifejezett oktatási célú feltételezés, nem a szakirodalomból átvett ipari hibaarány; valós üzemi adatok nélkül nem tekinthető mért értéknek.",
+        },
+        {
+            "Forrás / kiadó": "Projektmérnöki megjegyzés – kopás és önkorrekció",
             "Felhasznált állítás": "0,005% / pont kopási ütem, 100 baloldalfal-ciklusos csere, 5 s szimulált csereidő, 0,1 kA és 5 ms korrekciós lépés, 95%-os minőségi cél.",
             "Projektbeli szerep": "A demonstrációban használt beállítások.",
             "URL": "docs/parameter_realism_audit.md",
@@ -443,6 +465,7 @@ def export_production_report(
     coolant_flow_l_min: float = COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     coolant_inlet_temp_c: float = COOLANT_INLET_TARGET_MAX_C,
     coolant_outlet_temp_c: float = COOLANT_OUTLET_TARGET_MAX_C,
+    non_wear_defect_probability_percent: float = DEFAULT_NON_WEAR_DEFECT_PROBABILITY * 100.0,
 ) -> tuple[Path, bytes, dict[str, Any]]:
     """Write a dated Excel report to disk and return its bytes for browser download."""
     now = export_timestamp or datetime.now().astimezone()
@@ -464,7 +487,8 @@ def export_production_report(
         {"Beállítás": "Jelentés fájlneve", "Érték": target.name},
         {"Beállítás": "Adatbázis elérési útja", "Érték": str(Path(db_path).resolve())},
         {"Beállítás": "Napló mappája", "Érték": str(root.resolve())},
-        {"Beállítás": "Pont-eltérés valószínűsége (%)", "Érték": float(fault_rate_percent)},
+        {"Beállítás": "Tesztcélú pont-eltérés valószínűsége (%)", "Érték": float(fault_rate_percent)},
+        {"Beállítás": "Kopástól független alapfolyamat-hiba / pont (%)", "Érték": float(non_wear_defect_probability_percent)},
         {"Beállítás": "Eltérés módja", "Érték": fault_mode},
         {"Beállítás": "Szimulációs sebesség (%)", "Érték": float(speed_percent)},
         {"Beállítás": "Elektródakopás modellezése", "Érték": bool(wear_enabled)},
