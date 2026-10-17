@@ -37,7 +37,11 @@ from src.speed_control import (
 )
 from src.monitor_wait import MonitorCompletionTimeout, wait_for_body_completion
 from src.equipment_state import load_equipment_state, save_equipment_state
-from src.factory_settings import DEFAULT_FAULT_RATE, apply_factory_settings
+from src.factory_settings import (
+    DEFAULT_FAULT_RATE,
+    DEFAULT_NON_WEAR_DEFECT_PROBABILITY,
+    apply_factory_settings,
+)
 from src.wear_control import (
     COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     COOLANT_INLET_TARGET_MAX_C,
@@ -245,6 +249,9 @@ def automatic_production_worker(
         previous_config = config_id
         fault_rate = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
         fault_mode = str(state.get("fault_mode", "within_limits"))
+        non_wear_defect_probability = float(state.get(
+            "non_wear_defect_probability", DEFAULT_NON_WEAR_DEFECT_PROBABILITY
+        ))
         wear_enabled = bool(state.get("wear_enabled", True))
         wear_per_point_percent = float(state.get("wear_per_point_percent", DEFAULT_WEAR_PER_POINT_PERCENT))
         auto_correct_wear = bool(state.get("auto_correct_wear", True))
@@ -279,6 +286,10 @@ def automatic_production_worker(
                 coolant_flow_l_min=coolant_flow_l_min,
                 coolant_inlet_temp_c=coolant_inlet_temp_c,
                 coolant_outlet_temp_c=coolant_outlet_temp_c,
+                non_wear_defect_probability=non_wear_defect_probability,
+            )
+            non_wear_defect_count = sum(
+                event.get("simulated_variation") == "BACKGROUND_PROCESS_DEFECT" for event in events
             )
             wear_summary = events[-1].get("electrode_wear_summary", {})
             state["body_id"] = body_id
@@ -294,6 +305,8 @@ def automatic_production_worker(
                 "effective_publish_delay_ms": round(publish_delay_ms, 4),
                 "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "generated_event_count": len(events),
+                "non_wear_defect_probability_percent": round(non_wear_defect_probability * 100.0, 5),
+                "non_wear_defect_points_in_body": int(non_wear_defect_count),
                 "electrode_wear_enabled": wear_enabled,
                 "wear_per_point_percent": wear_per_point_percent,
                 "auto_correct_wear": auto_correct_wear,
@@ -332,6 +345,8 @@ def automatic_production_worker(
                 "monitor_status": monitor_result["status"],
                 "monitor_database_cycle_seconds": monitor_result.get("duration_seconds"),
                 "within_20_second_target": elapsed < 20.0,
+                "non_wear_defect_probability_percent": round(non_wear_defect_probability * 100.0, 5),
+                "non_wear_defect_points_in_body": int(non_wear_defect_count),
                 "electrode_wear_enabled": wear_enabled,
                 "wear_percent": wear_state.get("wear_percent", 0.0),
                 "corrected_points": wear_summary.get("corrected_points", 0),
@@ -547,6 +562,9 @@ def start_automatic_production() -> None:
     safe_application_log("automatic_production_started", {
         "fault_rate_percent": round(float(state["fault_rate"]) * 100.0, 3),
         "fault_mode": state["fault_mode"],
+        "non_wear_defect_probability_percent": round(
+            float(state.get("non_wear_defect_probability", DEFAULT_NON_WEAR_DEFECT_PROBABILITY)) * 100.0, 5
+        ),
         "speed_percent": state["speed_percent"],
         "electrode_wear_enabled": state["wear_enabled"],
         "wear_per_point_percent": state["wear_per_point_percent"],
@@ -583,6 +601,9 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
     worker = st.session_state.get("auto_thread")
     fault_rate_percent = float(state.get("fault_rate", DEFAULT_FAULT_RATE)) * 100.0
     fault_mode = str(state.get("fault_mode", "within_limits"))
+    non_wear_defect_probability_percent = float(
+        state.get("non_wear_defect_probability", DEFAULT_NON_WEAR_DEFECT_PROBABILITY)
+    ) * 100.0
     speed_percent = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
     wear_enabled = bool(state.get("wear_enabled", True))
     wear_per_point_percent = float(state.get("wear_per_point_percent", DEFAULT_WEAR_PER_POINT_PERCENT))
@@ -600,6 +621,7 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
         safe_application_log("logout_requested", {
             "fault_rate_percent": fault_rate_percent,
             "fault_mode": fault_mode,
+            "non_wear_defect_probability_percent": round(non_wear_defect_probability_percent, 5),
             "speed_percent": speed_percent,
             "electrode_wear_enabled": wear_enabled,
             "wear_per_point_percent": wear_per_point_percent,
@@ -623,6 +645,7 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
         session_started_at=session_started_at,
         fault_rate_percent=fault_rate_percent,
         fault_mode=fault_mode,
+        non_wear_defect_probability_percent=non_wear_defect_probability_percent,
         automatic_worker_stopped=worker_stopped,
         speed_percent=speed_percent,
 
@@ -673,6 +696,7 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
             session_started_at=session_started_at,
             fault_rate_percent=fault_rate_percent,
             fault_mode=fault_mode,
+            non_wear_defect_probability_percent=non_wear_defect_probability_percent,
             automatic_worker_stopped=worker_stopped,
             speed_percent=speed_percent,
 
@@ -1188,7 +1212,10 @@ def render_statistics_tab() -> None:
     st.info(
         "A folyamatparaméterek gyári alapértéken, csak a forráskódból módosíthatóan futnak. "
         "A kezelőfelületen kizárólag a szimuláció sebessége állítható. "
-        "A mesterséges hibaarány 0%; a kopás, önkorrekció, hűtés és automatikus eszközcsere fix beállításokat használ."
+        "A külön teszthiba-injektálás 0%; ettől függetlenül a kopástól független alapfolyamat-hiba esélye "
+        "0,01% hegesztési pontonként (1/10 000). Ez a projektben rögzített szimulációs feltételezés, "
+        "nem ipari átlagadat; 118–142 pont/oldalfal mellett kb. 1,17–1,41% az esélye, hogy egy oldalfalon "
+        "legalább egy ilyen hiba jelenik meg. A kopás, önkorrekció, hűtés és fejcsere szintén kódalapú fix beállítás."
     )
     with st.expander("Hegesztési recept – műszaki referencia-ellenőrzés", expanded=False):
         audit_rows = build_parameter_audit(CATALOG)
