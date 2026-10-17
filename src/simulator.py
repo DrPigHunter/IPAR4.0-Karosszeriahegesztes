@@ -23,7 +23,7 @@ def utc_now() -> str:
 
 
 def generate_body_events(
-    config_id: str, fault_rate: float = 0.0001, seed: int | None = None
+    config_id: str, fault_rate: float = 0.0, seed: int | None = None
 ) -> tuple[str, list[dict[str, Any]]]:
     """Generate a cycle using expected IDs, per-point nominal values, and limits from XLSX."""
     if not 0 <= fault_rate <= 1:
@@ -87,7 +87,11 @@ def generate_body_events(
 def publish_events(
     events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: int = 8
 ) -> None:
-    """Publish events in order using MQTT QoS 1."""
+    """Publish events in order with fresh send timestamps and MQTT QoS 1.
+
+    A 90 ms spacing approximates a visible welding cadence while keeping each
+    115–142 point simulated sidewall safely below the 20-second cycle target.
+    """
     if delay_ms < 0:
         raise ValueError("A delay_ms nem lehet negatív.")
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"welding-publisher-{uuid.uuid4().hex[:8]}")
@@ -95,7 +99,9 @@ def publish_events(
     client.loop_start()
     try:
         for event in events:
-            info = client.publish(EVENT_TOPIC, json.dumps(event, ensure_ascii=False), qos=1)
+            outbound = dict(event)
+            outbound["timestamp"] = utc_now()
+            info = client.publish(EVENT_TOPIC, json.dumps(outbound, ensure_ascii=False), qos=1)
             info.wait_for_publish(timeout=5)
             if info.rc != mqtt.MQTT_ERR_SUCCESS or not info.is_published():
                 raise RuntimeError(f"MQTT publikálási hiba: {info.rc}")
@@ -111,10 +117,10 @@ def main() -> None:
     labels = {cfg["config_id"]: cfg["label"] for cfg in configs}
     parser = argparse.ArgumentParser(description="Excel katalógus alapú karosszéria-/alkatrész-hegesztés szimulátor")
     parser.add_argument("--config-id", choices=sorted(labels), default=configs[0]["config_id"])
-    parser.add_argument("--fault-rate", type=float, default=0.0001, help="Szimulált hibák valószínűsége (0..1; alapérték: 0.0001)")
+    parser.add_argument("--fault-rate", type=float, default=0.0, help="Szimulált hibák valószínűsége (0..1; alapérték: 0 = hibainjektálás kikapcsolva)")
     parser.add_argument("--host", default=BROKER_HOST)
     parser.add_argument("--port", type=int, default=BROKER_PORT)
-    parser.add_argument("--delay-ms", type=int, default=8)
+    parser.add_argument("--delay-ms", type=int, default=90)
     args = parser.parse_args()
     body_id, events = generate_body_events(args.config_id, args.fault_rate)
     publish_events(events, args.host, args.port, args.delay_ms)
