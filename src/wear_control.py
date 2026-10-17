@@ -96,7 +96,7 @@ def apply_electrode_wear(
                 steps += 1
                 quality_before = _quality_index(event, point, quality_wear_percent)
 
-        quality_after = _quality_index(event, point, wear_percent)
+        quality_after = _quality_index(event, point, quality_wear_percent)
         corrected = steps > 0 and quality_after >= QUALITY_TARGET_PERCENT
         quality_ok = quality_after >= QUALITY_TARGET_PERCENT
 
