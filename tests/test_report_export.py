@@ -88,7 +88,7 @@ class ReportExportTests(unittest.TestCase):
             "Összesítő", "Modellenként", "Karosszériák", "Hegesztési adatok",
             "Utómunka sor", "Utómunka műveletek", "Rendszerhibák",
             "Futásnaplók", "Napi JSONL", "Összesített JSON", "Alkalmazás-napló",
-            "Konzolnapló", "Beállítások",
+            "Konzolnapló", "Beállítások", "Kopás és önkorrekció",
         }
         self.assertTrue(required_sheets.issubset(set(workbook.sheetnames)))
         self.assertEqual(workbook["Karosszériák"].max_row, 2)
@@ -107,6 +107,43 @@ class ReportExportTests(unittest.TestCase):
         run_logs = pd.read_excel(BytesIO(data), sheet_name="Futásnaplók")
         self.assertIn("body_id", run_logs.columns)
         workbook.close()
+
+    def test_electrode_wear_summary_and_settings_are_exported(self):
+        config = list_configurations()[0]
+        wear_state = {"wear_percent": 10.0}
+        body_id, events = generate_body_events(
+            config["config_id"], seed=55, wear_state=wear_state,
+            wear_per_point_percent=0.03, wear_enabled=True, auto_correct_wear=True,
+        )
+        for event in events:
+            process_event(self.conn, event, log_dir=self.log_dir)
+
+        path, data, _ = export_production_report(
+            session_started_at=time.time() - 120,
+            fault_rate_percent=0.0,
+            fault_mode="within_limits",
+            automatic_worker_stopped=True,
+            db_path=self.db_path,
+            log_dir=self.log_dir,
+            export_timestamp=datetime(2026, 10, 17, 18, 44, 0, tzinfo=timezone.utc),
+            wear_enabled=True,
+            wear_per_point_percent=0.03,
+            auto_correct_wear=True,
+        )
+        self.assertTrue(path.exists())
+        workbook = load_workbook(BytesIO(data), read_only=True, data_only=True)
+        self.assertIn("Kopás és önkorrekció", workbook.sheetnames)
+        workbook.close()
+
+        wear_summary = pd.read_excel(BytesIO(data), sheet_name="Kopás és önkorrekció")
+        total = wear_summary[wear_summary["Modellazonosító"] == "ÖSSZESEN"].iloc[0]
+        self.assertEqual(int(total["Hegesztési pontok"]), config["expected_count"])
+        self.assertGreaterEqual(float(total["Legnagyobb kopás (%)"]), 10.0)
+        settings = pd.read_excel(BytesIO(data), sheet_name="Beállítások")
+        setting_values = dict(zip(settings["Beállítás"], settings["Érték"]))
+        self.assertEqual(setting_values["Elektródakopás modellezése"], True)
+        self.assertEqual(setting_values["Kopás hegesztési pontonként (%)"], 0.03)
+        self.assertEqual(setting_values["Automatikus önkorrekció"], True)
 
     def test_two_exports_with_same_second_keep_distinct_files(self):
         timestamp = datetime(2026, 10, 17, 18, 42, 0, tzinfo=timezone.utc)
