@@ -12,7 +12,13 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from src.catalog import get_configuration, list_configurations
-from src.wear_control import apply_electrode_wear
+from src.wear_control import (
+    COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    COOLANT_INLET_TARGET_MAX_C,
+    COOLANT_OUTLET_TARGET_MAX_C,
+    DEFAULT_WEAR_PER_POINT_PERCENT,
+    apply_electrode_wear,
+)
 
 BROKER_HOST = "127.0.0.1"
 BROKER_PORT = 1883
@@ -66,9 +72,12 @@ def generate_body_events(
     seed: int | None = None,
     fault_mode: str = "within_limits",
     wear_state: dict[str, Any] | None = None,
-    wear_per_point_percent: float = 0.03,
+    wear_per_point_percent: float = DEFAULT_WEAR_PER_POINT_PERCENT,
     wear_enabled: bool = False,
     auto_correct_wear: bool = True,
+    coolant_flow_l_min: float = COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    coolant_inlet_temp_c: float = COOLANT_INLET_TARGET_MAX_C,
+    coolant_outlet_temp_c: float = COOLANT_OUTLET_TARGET_MAX_C,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Generate a complete cycle; fault_rate is a probability per individual weld point.
 
@@ -128,6 +137,9 @@ def generate_body_events(
             wear_per_point_percent=wear_per_point_percent,
             wear_enabled=wear_enabled,
             auto_correct=auto_correct_wear,
+            coolant_flow_l_min=coolant_flow_l_min,
+            coolant_inlet_temp_c=coolant_inlet_temp_c,
+            coolant_outlet_temp_c=coolant_outlet_temp_c,
         )
     return body_id, events
 
