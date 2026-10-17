@@ -157,6 +157,13 @@ def automatic_production_worker(
         previous_config = config_id
         fault_rate = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
         fault_mode = str(state.get("fault_mode", "within_limits"))
+        wear_enabled = bool(state.get("wear_enabled", True))
+        wear_per_point_percent = float(state.get("wear_per_point_percent", 0.03))
+        auto_correct_wear = bool(state.get("auto_correct_wear", True))
+        wear_state = state.setdefault("wear_state", {
+            "wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
+            "correction_steps": 0, "uncorrectable_points": 0,
+        })
         speed_percent = normalize_speed_percent(state.get("speed_percent", DEFAULT_SPEED_PERCENT))
         publish_delay_ms = scaled_publish_delay_ms(PUBLISH_DELAY_MS, speed_percent)
         inter_body_pause_seconds = scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent)
@@ -170,7 +177,12 @@ def automatic_production_worker(
                 config_id,
                 fault_rate=fault_rate,
                 fault_mode=fault_mode,
+                wear_state=wear_state,
+                wear_per_point_percent=wear_per_point_percent,
+                wear_enabled=wear_enabled,
+                auto_correct_wear=auto_correct_wear,
             )
+            wear_summary = events[-1].get("electrode_wear_summary", {})
             state["body_id"] = body_id
             state["config_id"] = config_id
             state["last_started_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
@@ -184,6 +196,12 @@ def automatic_production_worker(
                 "effective_publish_delay_ms": round(publish_delay_ms, 4),
                 "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "generated_event_count": len(events),
+                "electrode_wear_enabled": wear_enabled,
+                "wear_per_point_percent": wear_per_point_percent,
+                "auto_correct_wear": auto_correct_wear,
+                "wear_percent_after_cycle_generation": wear_summary.get("wear_percent", wear_state.get("wear_percent", 0.0)),
+                "predicted_corrected_points": wear_summary.get("corrected_points", 0),
+                "predicted_uncorrectable_points": wear_summary.get("uncorrectable_points", 0),
             })
             simulator_module.publish_events(events, delay_ms=publish_delay_ms)
             # Broker PUBACK only confirms broker receipt. Wait until the monitor has
@@ -206,7 +224,14 @@ def automatic_production_worker(
                 "monitor_status": monitor_result["status"],
                 "monitor_database_cycle_seconds": monitor_result.get("duration_seconds"),
                 "within_20_second_target": elapsed < 20.0,
+                "electrode_wear_enabled": wear_enabled,
+                "wear_percent": wear_state.get("wear_percent", 0.0),
+                "corrected_points": wear_summary.get("corrected_points", 0),
+                "correction_steps": wear_summary.get("correction_steps", 0),
+                "uncorrectable_points": wear_summary.get("uncorrectable_points", 0),
+                "quality_target_percent": wear_summary.get("quality_target_percent"),
             })
+            state["last_wear_summary"] = wear_summary
         except Exception as exc:
             detail = str(exc)
             if "unexpected keyword argument 'fault_mode'" in detail:
@@ -231,6 +256,8 @@ def automatic_production_worker(
                 "fault_rate_percent": round(fault_rate * 100.0, 3),
                 "fault_mode": fault_mode,
                 "speed_percent": speed_percent,
+                "electrode_wear_enabled": wear_enabled,
+                "wear_percent": wear_state.get("wear_percent", 0.0),
                 "effective_publish_delay_ms": round(publish_delay_ms, 4),
                 "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "error": detail,
@@ -307,6 +334,81 @@ def render_fault_controls() -> None:
     st.caption(f"Beállítva: {fault_rate_percent:.3f}% pontonként · {mode_description}. Az értékek indításig módosíthatók.")
 
 
+def render_wear_controls() -> None:
+    """Configure the synthetic electrode-wear model and bounded feedback controller."""
+    state = st.session_state["auto_state"]
+    st.markdown("### Elektródakopás és automatikus önkorrekció")
+    wear_col, rate_col, correction_col = st.columns([1.0, 1.2, 1.2])
+    with wear_col:
+        wear_enabled = st.checkbox(
+            "Kopás modellezése",
+            value=bool(state.get("wear_enabled", True)),
+            key="electrode_wear_enabled_v1",
+            help="Bekapcsolva a kopás minden hegesztési pontnál összeadódik, és csökkenti a szimulált hőbeviteli mutatót.",
+        )
+    with rate_col:
+        wear_per_point_percent = st.slider(
+            "Kopás hegesztési pontonként (%)",
+            min_value=0.0, max_value=0.1,
+            value=float(state.get("wear_per_point_percent", 0.03)),
+            step=0.005, format="%.3f%%",
+            key="electrode_wear_rate_v1",
+            help="Oktatási célú, szintetikus kopási ütem. Nem valós gyártói érték.",
+        )
+    with correction_col:
+        auto_correct = st.checkbox(
+            "Automatikus önkorrekció",
+            value=bool(state.get("auto_correct_wear", True)),
+            key="electrode_auto_correction_v1",
+            help="A vezérlés először az áramerősséget, majd szükség esetén a hegesztési időt emeli, a katalógus határértékein belül.",
+        )
+
+    state["wear_enabled"] = bool(wear_enabled)
+    state["wear_per_point_percent"] = float(wear_per_point_percent)
+    state["auto_correct_wear"] = bool(auto_correct)
+    settings = (wear_enabled, round(float(wear_per_point_percent), 3), auto_correct)
+    if st.session_state.get("last_logged_wear_settings") != settings:
+        safe_application_log("electrode_wear_settings_changed", {
+            "wear_enabled": wear_enabled,
+            "wear_per_point_percent": settings[1],
+            "auto_correct_wear": auto_correct,
+            "quality_target_percent": 95.0,
+        })
+        st.session_state["last_logged_wear_settings"] = settings
+
+    wear_state = state.setdefault("wear_state", {
+        "wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
+        "correction_steps": 0, "uncorrectable_points": 0,
+    })
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Aktuális elektródakopás", f'{float(wear_state.get("wear_percent", 0.0)):.2f}%')
+    m2.metric("Feldolgozott pontok", f'{int(wear_state.get("total_weld_points", 0)):,}'.replace(",", " "))
+    m3.metric("Önkorrekcióval javított pontok", f'{int(wear_state.get("corrected_points", 0)):,}'.replace(",", " "))
+    m4.metric("Sikertelen korrekciók", f'{int(wear_state.get("uncorrectable_points", 0)):,}'.replace(",", " "))
+    worker = st.session_state.get("auto_thread")
+    production_active = worker is not None and worker.is_alive()
+    if st.button(
+        "Elektróda cseréje / kopás nullázása",
+        key="reset_electrode_wear_v1",
+        disabled=production_active,
+        help="A kopási számláló és a kopásmodell mutatói nullázódnak. Csak leállított gyártásnál érhető el.",
+    ):
+        state["wear_state"] = {
+            "wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
+            "correction_steps": 0, "uncorrectable_points": 0,
+        }
+        state["last_wear_summary"] = {}
+        safe_application_log("electrode_replaced_wear_reset", {"wear_percent": 0.0})
+        st.toast("Elektródacsere rögzítve; a kopási számláló nullázódott.")
+        st.rerun()
+    if not wear_enabled:
+        st.caption("A kopásmodell kikapcsolva. A jelenlegi kopási állapot megmarad, de a minőségi mutatót nem rontja.")
+    elif auto_correct:
+        st.caption("A vezérlő a 95%-os szintet próbálja elérni, kizárólag az Excel-katalógusban engedélyezett áram- és időtartományon belül. Ha ez nem sikerül, a monitor utómunkát rendel el.")
+    else:
+        st.caption("Önkorrekció nélkül a kopásból származó, célérték alatti minőség automatikusan utómunkát eredményez.")
+
+
 def start_automatic_production() -> None:
     """Start production only after the operator presses the start button."""
     old_thread = st.session_state.get("auto_thread")
@@ -327,6 +429,9 @@ def start_automatic_production() -> None:
         state = {
             "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
             "fault_mode": "within_limits", "speed_percent": DEFAULT_SPEED_PERCENT,
+            "wear_enabled": True, "wear_per_point_percent": 0.03, "auto_correct_wear": True,
+            "wear_state": {"wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
+                           "correction_steps": 0, "uncorrectable_points": 0},
             "session_started_at": st.session_state.get("app_session_started_at", time.time()),
             "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
             "error": None,
@@ -336,6 +441,11 @@ def start_automatic_production() -> None:
     state["running"] = True
     state["fault_rate"] = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
     state["fault_mode"] = str(state.get("fault_mode", "within_limits"))
+    state.setdefault("wear_enabled", True)
+    state.setdefault("wear_per_point_percent", 0.03)
+    state.setdefault("auto_correct_wear", True)
+    state.setdefault("wear_state", {"wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
+                                    "correction_steps": 0, "uncorrectable_points": 0})
     state["speed_percent"] = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
     state.setdefault("completed_cycles", 0)
     state.setdefault("session_started_at", st.session_state.get("app_session_started_at", time.time()))
@@ -358,6 +468,10 @@ def start_automatic_production() -> None:
         "fault_rate_percent": round(float(state["fault_rate"]) * 100.0, 3),
         "fault_mode": state["fault_mode"],
         "speed_percent": state["speed_percent"],
+        "electrode_wear_enabled": state["wear_enabled"],
+        "wear_per_point_percent": state["wear_per_point_percent"],
+        "auto_correct_wear": state["auto_correct_wear"],
+        "wear_percent_at_start": state["wear_state"].get("wear_percent", 0.0),
         "effective_publish_delay_ms": round(scaled_publish_delay_ms(PUBLISH_DELAY_MS, state["speed_percent"]), 4),
         "effective_inter_body_pause_seconds": round(scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, state["speed_percent"]), 4),
     })
@@ -622,6 +736,9 @@ if "auto_state" not in st.session_state:
     st.session_state["auto_state"] = {
         "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
         "fault_mode": "within_limits", "speed_percent": DEFAULT_SPEED_PERCENT,
+        "wear_enabled": True, "wear_per_point_percent": 0.03, "auto_correct_wear": True,
+        "wear_state": {"wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
+                       "correction_steps": 0, "uncorrectable_points": 0},
         "session_started_at": st.session_state.get("app_session_started_at", time.time()),
         "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
         "error": None,
@@ -833,6 +950,28 @@ def render_production_tab() -> None:
         duration_text = "Ciklusidő: feldolgozás alatt · cél: 20 mp alatt"
     st.caption(duration_text)
 
+    wear_payloads: list[dict[str, Any]] = []
+    if not body_events.empty and "raw_json" in body_events:
+        for raw_payload in body_events["raw_json"].tolist():
+            try:
+                payload = json.loads(str(raw_payload))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if payload.get("event_type") == "weld_result" and "electrode_wear_enabled" in payload:
+                wear_payloads.append(payload)
+    corrected_in_body = sum(bool(item.get("auto_correction_applied")) for item in wear_payloads)
+    correction_steps_in_body = sum(int(item.get("auto_correction_steps", 0) or 0) for item in wear_payloads)
+    uncorrectable_in_body = sum(item.get("process_quality_ok") is False for item in wear_payloads)
+    wear_state = auto_state.get("wear_state", {})
+    wm1, wm2, wm3, wm4 = st.columns(4)
+    wm1.metric("Elektróda kopása", f'{float(wear_state.get("wear_percent", 0.0)):.2f}%')
+    wm2.metric("Korrigált pontok ebben az oldalfalban", str(corrected_in_body))
+    wm3.metric("Korrekciós lépések", str(correction_steps_in_body))
+    wm4.metric("Sikertelen pontkorrekciók", str(uncorrectable_in_body))
+    if wear_payloads:
+        st.caption(f"Utolsó pont állapota: {wear_payloads[-1].get('wear_quality_status', '—')} · "
+                   f"szimulált minőségi mutató: {wear_payloads[-1].get('simulated_quality_index_percent', '—')}%")
+
     latest = body_events.iloc[-1] if not body_events.empty else None
     metric_cols = st.columns(4)
     if latest is None:
@@ -883,6 +1022,7 @@ def render_statistics_tab() -> None:
     st.caption("A fő statisztika csak a mostani böngésző-munkamenetben indult oldalfalakat számolja; a korábbi futások az előzményekben maradnak.")
     # This control panel must remain visible even before the first body exists.
     render_fault_controls()
+    render_wear_controls()
     if bodies.empty:
         st.info("Az adatbázis még nem kapott karosszéria-eseményt. Ellenőrizd a Docker MQTT-brokert és a python -m src.monitor folyamatot.")
         return
