@@ -493,6 +493,9 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
     fault_rate_percent = float(state.get("fault_rate", DEFAULT_FAULT_RATE)) * 100.0
     fault_mode = str(state.get("fault_mode", "within_limits"))
     speed_percent = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
+    wear_enabled = bool(state.get("wear_enabled", True))
+    wear_per_point_percent = float(state.get("wear_per_point_percent", 0.03))
+    auto_correct_wear = bool(state.get("auto_correct_wear", True))
     session_started_at = st.session_state.get("app_session_started_at")
     export_time = datetime.now().astimezone()
 
@@ -501,6 +504,9 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
             "fault_rate_percent": fault_rate_percent,
             "fault_mode": fault_mode,
             "speed_percent": speed_percent,
+            "electrode_wear_enabled": wear_enabled,
+            "wear_per_point_percent": wear_per_point_percent,
+            "auto_correct_wear": auto_correct_wear,
             "worker_was_alive": bool(worker is not None and worker.is_alive()),
         })
         if stop_event is not None:
@@ -516,6 +522,12 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
         fault_mode=fault_mode,
         automatic_worker_stopped=worker_stopped,
         speed_percent=speed_percent,
+
+        wear_enabled=wear_enabled,
+
+        wear_per_point_percent=wear_per_point_percent,
+
+        auto_correct_wear=auto_correct_wear,
         db_path=DB_PATH,
         log_dir=ROOT / "logs",
         export_timestamp=export_time,
@@ -550,6 +562,12 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
             fault_mode=fault_mode,
             automatic_worker_stopped=worker_stopped,
             speed_percent=speed_percent,
+
+            wear_enabled=wear_enabled,
+
+            wear_per_point_percent=wear_per_point_percent,
+
+            auto_correct_wear=auto_correct_wear,
             db_path=DB_PATH,
             log_dir=ROOT / "logs",
             export_timestamp=export_time,
