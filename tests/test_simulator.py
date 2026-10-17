@@ -25,7 +25,7 @@ class SimulatorTests(unittest.TestCase):
     def test_default_fault_rate_is_low(self):
         import inspect
         parameter = inspect.signature(generate_body_events).parameters["fault_rate"]
-        self.assertLessEqual(parameter.default, 0.0001)
+        self.assertEqual(parameter.default, 0.0)
 
 
 if __name__ == "__main__":
