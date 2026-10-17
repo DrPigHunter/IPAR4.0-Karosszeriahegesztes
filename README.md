@@ -104,7 +104,7 @@ A jelentés munkalapjai többek között:
 
 A **Napló és export** fül az adatbázis összes karosszéria-, hegesztési pont-, utómunka- és rendszerhiba-bejegyzését, a JSON/JSONL naplókat, az alkalmazásnaplót, a monitor/dashboard konzolnaplókat és a már mentett Excel-exportok listáját jeleníti meg. A gombnyomások, hibabeállítás-változások, karosszériánként használt hibaarányok, ciklusidők és indítási/leállítási kérések napi alkalmazásnaplóba íródnak. Az indítószkript a monitor és a dashboard kimenetét is a logs/monitor.log és logs/dashboard.log fájlokba irányítja. A mérési adatok SQLite-ban, a lezárt ciklusok JSON/JSONL-fájlokban folyamatosan megmaradnak akkor is, ha a kezelőfelület váratlanul bezáródik.
 
-Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉÉÉ-HH-NN_ÓÓ-PP-MP_mikromásodperc.xlsx`.
+Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉÉÉ-HH-NN_ÓÓ-PP-MP_ffffff.xlsx`.
 
 
 ## Tesztek futtatása
