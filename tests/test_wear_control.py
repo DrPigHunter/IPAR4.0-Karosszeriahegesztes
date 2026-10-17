@@ -14,7 +14,7 @@ CONFIG = list_configurations()[0]
 
 class ElectrodeWearTests(unittest.TestCase):
     def test_wear_accumulates_and_controller_corrects_inside_catalog_limits(self):
-        state = {"wear_percent": 20.0}
+        state = {"wear_percent": 10.0}
         _, events = generate_body_events(
             CONFIG["config_id"],
             fault_rate=0.0,
@@ -36,6 +36,24 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertTrue(all(limits.weld_time_min <= event["weld_time_ms"] <= limits.weld_time_max
                             for event in points))
         self.assertTrue(all(event["process_quality_ok"] for event in points))
+
+    def test_deliberately_injected_limit_fault_is_not_hidden_by_controller(self):
+        point = CONFIG["points"][0]
+        event = {
+            "event_type": "weld_result",
+            "weld_id": point["weld_id"],
+            "current_ka": CONFIG["limits"].current_min - 0.01,
+            "weld_time_ms": point["nominal_weld_time_ms"],
+            "electrode_force_kn": point["nominal_electrode_force_kn"],
+            "simulated_variation": "OUTSIDE_ACCEPTED_LIMITS",
+        }
+        apply_electrode_wear(
+            [event], CONFIG, {"wear_percent": 0.0},
+            wear_per_point_percent=0.0, wear_enabled=True, auto_correct=True,
+        )
+        self.assertLess(event["current_ka"], CONFIG["limits"].current_min)
+        self.assertFalse(event["process_quality_ok"])
+        self.assertEqual(event["auto_correction_steps"], 0)
 
     def test_wear_accumulates_between_calls(self):
         state = {}
