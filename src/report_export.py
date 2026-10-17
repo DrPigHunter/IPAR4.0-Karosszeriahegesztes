@@ -154,6 +154,7 @@ def _make_summary(
     fault_mode: str,
     automatic_worker_stopped: bool,
     export_timestamp: str,
+    speed_percent: float = 100.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     bodies_all = tables["bodies"]
     bodies_session = _session_filter(bodies_all, session_started_at)
@@ -179,6 +180,7 @@ def _make_summary(
         {"Kategória": "Jelentés", "Mutató": "Automatika leállt az exportig", "Érték": automatic_worker_stopped, "Megjegyzés": "False esetén az Excel az automatikus leállásra várás nélkül is elkészült"},
         {"Kategória": "Beállítások", "Mutató": "Pont-eltérés valószínűsége (%)", "Érték": round(float(fault_rate_percent), 3), "Megjegyzés": "Egy hegesztési pontra vonatkozó esély"},
         {"Kategória": "Beállítások", "Mutató": "Eltérés módja", "Érték": fault_mode, "Megjegyzés": "within_limits = határon belül; outside_limits = határon kívül"},
+        {"Kategória": "Beállítások", "Mutató": "Szimulációs sebesség (%)", "Érték": float(speed_percent), "Megjegyzés": "100% = eredeti beállítás; a küldési késleltetés és a karosszériák közötti szünet skálázott"},
         {"Kategória": "Aktuális munkamenet", "Mutató": "Oldalfalak összesen", "Érték": len(bodies_session), "Megjegyzés": "A munkamenetben indított karosszériák"},
         {"Kategória": "Aktuális munkamenet", "Mutató": "Lezárt oldalfalak", "Érték": len(completed), "Megjegyzés": "Nem FOLYAMATBAN állapotú karosszériák"},
         {"Kategória": "Aktuális munkamenet", "Mutató": "Folyamatban exportkor", "Érték": in_progress, "Megjegyzés": "Ezek a rekordok is szerepelnek a részletes adatok között"},
@@ -228,6 +230,7 @@ def _make_summary(
         "session_scrap_count": scrap, "session_in_progress_count": in_progress,
         "session_pass_rate_percent": _percent(good, len(completed)),
         "session_scrap_rate_percent": _percent(scrap, len(completed)),
+        "speed_percent": float(speed_percent),
         "total_weld_events": len(events), "total_system_errors": len(errors), "total_bodies": len(bodies_all),
     }
     return summary, by_model, info
@@ -253,6 +256,7 @@ def export_production_report(
     db_path: str | Path = DEFAULT_DB_PATH,
     log_dir: str | Path = DEFAULT_LOG_DIR,
     export_timestamp: datetime | None = None,
+    speed_percent: float = 100.0,
 ) -> tuple[Path, bytes, dict[str, Any]]:
     """Write a dated Excel report to disk and return its bytes for browser download."""
     now = export_timestamp or datetime.now().astimezone()
@@ -267,6 +271,7 @@ def export_production_report(
     summary, by_model, info = _make_summary(
         tables, session_started_at, fault_rate_percent, fault_mode,
         automatic_worker_stopped, now.isoformat(timespec="seconds"),
+        speed_percent=speed_percent,
     )
     settings = pd.DataFrame([
         {"Beállítás": "Jelentés fájlneve", "Érték": target.name},
@@ -274,6 +279,7 @@ def export_production_report(
         {"Beállítás": "Napló mappája", "Érték": str(root.resolve())},
         {"Beállítás": "Pont-eltérés valószínűsége (%)", "Érték": float(fault_rate_percent)},
         {"Beállítás": "Eltérés módja", "Érték": fault_mode},
+        {"Beállítás": "Szimulációs sebesség (%)", "Érték": float(speed_percent)},
         {"Beállítás": "Automatika leállt az exportig", "Érték": bool(automatic_worker_stopped)},
         {"Beállítás": "Megjegyzés", "Érték": "A részletes lapok minden elérhető adatbázisrekordot tartalmaznak, nem csak a képernyőn látható legutóbbi sorokat."},
     ])
