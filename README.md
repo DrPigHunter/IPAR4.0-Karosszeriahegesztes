@@ -113,4 +113,4 @@ Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉ�
 
     python -m unittest discover -s tests -v
 
-A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést, a monitor véglegesítésére várást, a teljes Excel-exportot és a nagy munkalapok biztonságos darabolását.
+A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést, a monitor véglegesítésére várást, a teljes Excel-exportot és a nagy munkalapok biztonságos darabolását. A GitHub Actions külön, valódi Mosquitto-brokerrel is végigteszteli az MQTT → monitor → SQLite folyamatot hibátlan és szándékosan hibás karosszériával.
