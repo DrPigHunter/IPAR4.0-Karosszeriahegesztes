@@ -109,6 +109,14 @@ A **Napló és export** fül az adatbázis összes karosszéria-, hegesztési po
 Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉÉÉ-HH-NN_ÓÓ-PP-MP_ffffff.xlsx`.
 
 
+## Elektródakopás és automatikus önkorrekció
+
+A külön fejlesztési ágban elérhető kopásmodell fokozatosan növeli az elektróda kopottságát, és csökkenti a **szintetikus** minőségi/hőbeviteli mutatót. A Statisztika és utómunka fülön állítható a kopási ráta, a kopásmodell, illetve az önkorrekció. A vezérlő a 95%-os célérték eléréséhez előbb az áramerősséget, majd szükség esetén a hegesztési időt módosítja; minden változtatás a modell Excel-katalógusának határain belül marad. Ha a minőségi cél ezeken belül sem érhető el, a monitor hibát rögzít és az oldalfalat utómunkára küldi. A panelen az elektródacsere gomb nullázza és naplózza a kopási állapotot; a csere csak álló automatika mellett engedélyezett.
+
+A részletes pontadatokban szerepel a kopottság, a korrekció lépésszáma, a korrekció művelete, a becsült minőségi index és a sikeresség. Az Excel-export külön `Kopás és önkorrekció` munkalapon összegzi ezeket.
+
+**Oktatási korlátozás:** a kopási ráta és a minőségi index demonstrációs modell. Nem valós ipari recept, és az index önmagában nem bizonyítja a hegesztési kötés fizikai szilárdságát.
+
 ## Tesztek futtatása
 
     python -m unittest discover -s tests -v
