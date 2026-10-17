@@ -30,6 +30,10 @@ from src.monitor import (
 )
 from src import simulator as simulator_module
 from src.report_export import append_application_log, export_production_report, load_all_tables, load_file_logs
+from src.speed_control import (
+    DEFAULT_SPEED_PERCENT, MAX_SPEED_PERCENT, MIN_SPEED_PERCENT,
+    normalize_speed_percent, scaled_inter_body_pause_seconds, scaled_publish_delay_ms,
+)
 
 BETWEEN_BODIES_PAUSE_SECONDS = 10.0
 PUBLISH_DELAY_MS = 90  # milliseconds per weld result; 142 points take about 13 seconds
@@ -152,6 +156,9 @@ def automatic_production_worker(
         previous_config = config_id
         fault_rate = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
         fault_mode = str(state.get("fault_mode", "within_limits"))
+        speed_percent = normalize_speed_percent(state.get("speed_percent", DEFAULT_SPEED_PERCENT))
+        publish_delay_ms = scaled_publish_delay_ms(PUBLISH_DELAY_MS, speed_percent)
+        inter_body_pause_seconds = scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent)
         cycle_started = time.monotonic()
         body_id = ""
         try:
@@ -172,9 +179,12 @@ def automatic_production_worker(
                 "config_id": config_id,
                 "fault_rate_percent": round(fault_rate * 100.0, 3),
                 "fault_mode": fault_mode,
+                "speed_percent": speed_percent,
+                "effective_publish_delay_ms": round(publish_delay_ms, 4),
+                "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "generated_event_count": len(events),
             })
-            simulator_module.publish_events(events, delay_ms=PUBLISH_DELAY_MS)
+            simulator_module.publish_events(events, delay_ms=publish_delay_ms)
             elapsed = round(time.monotonic() - cycle_started, 3)
             state["completed_cycles"] = int(state.get("completed_cycles", 0)) + 1
             state["last_sent_body_id"] = body_id
@@ -183,6 +193,9 @@ def automatic_production_worker(
                 "config_id": config_id,
                 "fault_rate_percent": round(fault_rate * 100.0, 3),
                 "fault_mode": fault_mode,
+                "speed_percent": speed_percent,
+                "effective_publish_delay_ms": round(publish_delay_ms, 4),
+                "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "generated_event_count": len(events),
                 "publish_duration_seconds": elapsed,
                 "within_20_second_target": elapsed < 20.0,
@@ -201,11 +214,14 @@ def automatic_production_worker(
                 "config_id": config_id,
                 "fault_rate_percent": round(fault_rate * 100.0, 3),
                 "fault_mode": fault_mode,
+                "speed_percent": speed_percent,
+                "effective_publish_delay_ms": round(publish_delay_ms, 4),
+                "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "error": detail,
                 "elapsed_seconds": round(time.monotonic() - cycle_started, 3),
             }, level="ERROR")
         # A full cycle must finish before the separate 10-second inter-body pause begins.
-        stop_event.wait(BETWEEN_BODIES_PAUSE_SECONDS)
+        stop_event.wait(inter_body_pause_seconds)
     state["running"] = False
 
 
@@ -293,7 +309,7 @@ def start_automatic_production() -> None:
     if state is None:
         state = {
             "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
-            "fault_mode": "within_limits",
+            "fault_mode": "within_limits", "speed_percent": DEFAULT_SPEED_PERCENT,
             "session_started_at": st.session_state.get("app_session_started_at", time.time()),
             "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
             "error": None,
@@ -303,6 +319,7 @@ def start_automatic_production() -> None:
     state["running"] = True
     state["fault_rate"] = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
     state["fault_mode"] = str(state.get("fault_mode", "within_limits"))
+    state["speed_percent"] = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
     state.setdefault("completed_cycles", 0)
     state.setdefault("session_started_at", st.session_state.get("app_session_started_at", time.time()))
     state.setdefault("body_id", "")
@@ -323,6 +340,9 @@ def start_automatic_production() -> None:
     safe_application_log("automatic_production_started", {
         "fault_rate_percent": round(float(state["fault_rate"]) * 100.0, 3),
         "fault_mode": state["fault_mode"],
+        "speed_percent": state["speed_percent"],
+        "effective_publish_delay_ms": round(scaled_publish_delay_ms(PUBLISH_DELAY_MS, state["speed_percent"]), 4),
+        "effective_inter_body_pause_seconds": round(scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, state["speed_percent"]), 4),
     })
 
 
@@ -341,6 +361,7 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
     worker = st.session_state.get("auto_thread")
     fault_rate_percent = float(state.get("fault_rate", DEFAULT_FAULT_RATE)) * 100.0
     fault_mode = str(state.get("fault_mode", "within_limits"))
+    speed_percent = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
     session_started_at = st.session_state.get("app_session_started_at")
     export_time = datetime.now().astimezone().replace(microsecond=0)
 
@@ -348,6 +369,7 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
         safe_application_log("logout_requested", {
             "fault_rate_percent": fault_rate_percent,
             "fault_mode": fault_mode,
+            "speed_percent": speed_percent,
             "worker_was_alive": bool(worker is not None and worker.is_alive()),
         })
         if stop_event is not None:
@@ -362,6 +384,7 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
         fault_rate_percent=fault_rate_percent,
         fault_mode=fault_mode,
         automatic_worker_stopped=worker_stopped,
+        speed_percent=speed_percent,
         db_path=DB_PATH,
         log_dir=ROOT / "logs",
         export_timestamp=export_time,
@@ -395,6 +418,7 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
             fault_rate_percent=fault_rate_percent,
             fault_mode=fault_mode,
             automatic_worker_stopped=worker_stopped,
+            speed_percent=speed_percent,
             db_path=DB_PATH,
             log_dir=ROOT / "logs",
             export_timestamp=export_time,
@@ -580,12 +604,13 @@ if "auto_state" not in st.session_state:
     # then explicitly starts the automatic production from the live tab.
     st.session_state["auto_state"] = {
         "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
-        "fault_mode": "within_limits",
+        "fault_mode": "within_limits", "speed_percent": DEFAULT_SPEED_PERCENT,
         "session_started_at": st.session_state.get("app_session_started_at", time.time()),
         "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
         "error": None,
     }
     st.session_state["auto_stop_event"] = threading.Event()
+st.session_state.setdefault("speed_percent_input", DEFAULT_SPEED_PERCENT)
 
 header_left, header_right = st.columns([5.4, 1.2], vertical_alignment="center")
 with header_left:
@@ -658,6 +683,7 @@ if st.session_state.get("logged_out"):
         st.session_state["logged_out"] = False
         st.session_state["logout_report"] = None
         st.session_state["logout_export_error"] = None
+        st.session_state["speed_percent_input"] = DEFAULT_SPEED_PERCENT
         st.session_state.pop("auto_state", None)
         st.session_state.pop("auto_thread", None)
         st.session_state.pop("auto_stop_event", None)
@@ -681,10 +707,31 @@ def render_production_tab() -> None:
     worker_alive = worker is not None and worker.is_alive()
     running = bool(auto_state.get("running")) and not stop_event.is_set()
 
-    head_left, head_right = st.columns([5, 1.3], vertical_alignment="center")
+    head_left, head_speed, head_right = st.columns([4.1, 2.4, 1.6], vertical_alignment="center")
     with head_left:
         st.markdown("## Gyártócella élő nézete")
-        st.caption(f"Karosszéria-hegesztés 20 mp alatt · két karosszéria között {BETWEEN_BODIES_PAUSE_SECONDS:.0f} mp szünet · automatikus modellválasztás")
+        st.caption("Automatikus modellválasztás · MQTT · állítható szimulációs sebesség")
+    with head_speed:
+        speed_percent = normalize_speed_percent(st.number_input(
+            "Szimuláció sebessége (%)",
+            min_value=MIN_SPEED_PERCENT,
+            max_value=MAX_SPEED_PERCENT,
+            value=normalize_speed_percent(st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)),
+            step=100,
+            key="speed_percent_input",
+            help="100% = jelenlegi sebesség (90 ms pontonként, 10 mp szünet). Legfeljebb 10 000%-ra emelhető.",
+        ))
+        previous_speed = auto_state.get("speed_percent", DEFAULT_SPEED_PERCENT)
+        auto_state["speed_percent"] = speed_percent
+        if int(previous_speed) != speed_percent:
+            safe_application_log("simulation_speed_changed", {
+                "speed_percent": speed_percent,
+                "effective_publish_delay_ms": round(scaled_publish_delay_ms(PUBLISH_DELAY_MS, speed_percent), 4),
+                "effective_inter_body_pause_seconds": round(scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent), 4),
+            })
+        effective_delay = scaled_publish_delay_ms(PUBLISH_DELAY_MS, speed_percent)
+        effective_pause = scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent)
+        st.caption(f"{effective_delay:.3f} ms / pont · {effective_pause:.3f} mp szünet · a következő ciklustól érvényes")
     with head_right:
         if running:
             if st.button("Ⅱ  Automatika leállítása", key="stop_auto", use_container_width=True):
