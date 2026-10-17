@@ -264,7 +264,6 @@ def split_long_sheets(
         if len(frame) <= max_data_rows:
             expanded[sheet_name] = frame
             continue
-        part_count = (len(frame) + max_data_rows - 1) // max_data_rows
         for part_index, start in enumerate(range(0, len(frame), max_data_rows), start=1):
             suffix = f" {part_index}"
             safe_name = f"{sheet_name[:31 - len(suffix)]}{suffix}"
