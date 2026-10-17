@@ -35,6 +35,13 @@ from src.speed_control import (
     normalize_speed_percent, scaled_inter_body_pause_seconds, scaled_publish_delay_ms,
 )
 from src.monitor_wait import MonitorCompletionTimeout, wait_for_body_completion
+from src.wear_control import (
+    DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    ensure_wear_state,
+    register_completed_body_for_tool,
+    replace_electrode_tool,
+    replace_tool_if_due,
+)
 
 BETWEEN_BODIES_PAUSE_SECONDS = 10.0
 PUBLISH_DELAY_MS = 90  # milliseconds per weld result; 142 points take about 13 seconds
@@ -145,6 +152,21 @@ def json_list(value: Any) -> list[str]:
         return []
 
 
+def log_tool_replacement(
+    state: dict[str, Any],
+    change: dict[str, Any],
+    interval_bodies: int,
+) -> None:
+    """Persist automatic/manual tool-change details for the dashboard and Excel export."""
+    details = {
+        **change,
+        "replacement_interval_bodies": int(interval_bodies),
+        "new_tool_wear_starts_at_percent": 0.0,
+    }
+    state["last_tool_change"] = details
+    safe_application_log("electrode_tool_replaced", details)
+
+
 def automatic_production_worker(
     stop_event: threading.Event, state: dict[str, Any], config_ids: list[str]
 ) -> None:
@@ -152,6 +174,17 @@ def automatic_production_worker(
     state["running"] = True
     previous_config = ""
     while not stop_event.is_set():
+        wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
+        tool_change_interval = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
+        auto_tool_change_enabled = bool(state.get("auto_tool_change_enabled", True))
+        due_change = replace_tool_if_due(
+            wear_state,
+            tool_change_interval,
+            enabled=auto_tool_change_enabled,
+            body_id=str(state.get("last_sent_body_id") or ""),
+        )
+        if due_change is not None:
+            log_tool_replacement(state, due_change, tool_change_interval)
         options = [value for value in config_ids if value != previous_config] or config_ids
         config_id = random.choice(options)
         previous_config = config_id
@@ -160,10 +193,7 @@ def automatic_production_worker(
         wear_enabled = bool(state.get("wear_enabled", True))
         wear_per_point_percent = float(state.get("wear_per_point_percent", 0.03))
         auto_correct_wear = bool(state.get("auto_correct_wear", True))
-        wear_state = state.setdefault("wear_state", {
-            "wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
-            "correction_steps": 0, "uncorrectable_points": 0,
-        })
+        wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
         speed_percent = normalize_speed_percent(state.get("speed_percent", DEFAULT_SPEED_PERCENT))
         publish_delay_ms = scaled_publish_delay_ms(PUBLISH_DELAY_MS, speed_percent)
         inter_body_pause_seconds = scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent)
@@ -199,6 +229,10 @@ def automatic_production_worker(
                 "electrode_wear_enabled": wear_enabled,
                 "wear_per_point_percent": wear_per_point_percent,
                 "auto_correct_wear": auto_correct_wear,
+                "current_tool_number": wear_state.get("current_tool_number", 1),
+                "bodies_since_tool_change": wear_state.get("bodies_since_tool_change", 0),
+                "tool_change_interval_bodies": tool_change_interval,
+                "automatic_tool_change_enabled": auto_tool_change_enabled,
                 "wear_percent_after_cycle_generation": wear_summary.get("wear_percent", wear_state.get("wear_percent", 0.0)),
                 "predicted_corrected_points": wear_summary.get("corrected_points", 0),
                 "predicted_uncorrectable_points": wear_summary.get("uncorrectable_points", 0),
@@ -232,6 +266,16 @@ def automatic_production_worker(
                 "quality_target_percent": wear_summary.get("quality_target_percent"),
             })
             state["last_wear_summary"] = wear_summary
+            tool_change_interval = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
+            auto_tool_change_enabled = bool(state.get("auto_tool_change_enabled", True))
+            change = register_completed_body_for_tool(
+                wear_state,
+                tool_change_interval,
+                enabled=auto_tool_change_enabled,
+                body_id=body_id,
+            )
+            if change is not None:
+                log_tool_replacement(state, change, tool_change_interval)
         except Exception as exc:
             detail = str(exc)
             if "unexpected keyword argument 'fault_mode'" in detail:
@@ -335,9 +379,9 @@ def render_fault_controls() -> None:
 
 
 def render_wear_controls() -> None:
-    """Configure the synthetic electrode-wear model and bounded feedback controller."""
+    """Configure electrode wear, bounded correction, and automatic tool replacement."""
     state = st.session_state["auto_state"]
-    st.markdown("### Elektródakopás és automatikus önkorrekció")
+    st.markdown("### Elektródakopás, önkorrekció és automatikus eszközcsere")
     wear_col, rate_col, correction_col = st.columns([1.0, 1.2, 1.2])
     with wear_col:
         wear_enabled = st.checkbox(
@@ -363,51 +407,87 @@ def render_wear_controls() -> None:
             help="A vezérlés először az áramerősséget, majd szükség esetén a hegesztési időt emeli, a katalógus határértékein belül.",
         )
 
+    change_enabled_col, change_interval_col = st.columns([1.0, 1.4])
+    with change_enabled_col:
+        auto_tool_change_enabled = st.checkbox(
+            "Automatikus eszközcsere",
+            value=bool(state.get("auto_tool_change_enabled", True)),
+            key="automatic_tool_change_enabled_v1",
+            help="Bekapcsolva a megadott számú, teljesen feldolgozott karosszéria után új eszköz indul 0% kopással.",
+        )
+    with change_interval_col:
+        tool_change_interval = int(st.number_input(
+            "Eszközcsere minden X karosszéria után",
+            min_value=MIN_TOOL_CHANGE_INTERVAL_BODIES,
+            max_value=MAX_TOOL_CHANGE_INTERVAL_BODIES,
+            value=int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)),
+            step=1,
+            key="tool_change_interval_bodies_v1",
+            help="Az X-edik lezárt karosszéria után történik a csere; a következő ciklus már az új eszközt használja.",
+        ))
+
     state["wear_enabled"] = bool(wear_enabled)
     state["wear_per_point_percent"] = float(wear_per_point_percent)
     state["auto_correct_wear"] = bool(auto_correct)
-    settings = (wear_enabled, round(float(wear_per_point_percent), 3), auto_correct)
+    state["auto_tool_change_enabled"] = bool(auto_tool_change_enabled)
+    state["tool_change_interval_bodies"] = tool_change_interval
+    settings = (
+        wear_enabled, round(float(wear_per_point_percent), 3), auto_correct,
+        auto_tool_change_enabled, tool_change_interval,
+    )
     if st.session_state.get("last_logged_wear_settings") != settings:
         safe_application_log("electrode_wear_settings_changed", {
             "wear_enabled": wear_enabled,
             "wear_per_point_percent": settings[1],
             "auto_correct_wear": auto_correct,
+            "auto_tool_change_enabled": auto_tool_change_enabled,
+            "tool_change_interval_bodies": tool_change_interval,
             "quality_target_percent": 95.0,
         })
         st.session_state["last_logged_wear_settings"] = settings
 
-    wear_state = state.setdefault("wear_state", {
-        "wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
-        "correction_steps": 0, "uncorrectable_points": 0,
-    })
+    wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Aktuális elektródakopás", f'{float(wear_state.get("wear_percent", 0.0)):.2f}%')
-    m2.metric("Feldolgozott pontok", f'{int(wear_state.get("total_weld_points", 0)):,}'.replace(",", " "))
+    m2.metric("Feldolgozott pontok összesen", f'{int(wear_state.get("total_weld_points", 0)):,}'.replace(",", " "))
     m3.metric("Önkorrekcióval javított pontok", f'{int(wear_state.get("corrected_points", 0)):,}'.replace(",", " "))
     m4.metric("Sikertelen korrekciók", f'{int(wear_state.get("uncorrectable_points", 0)):,}'.replace(",", " "))
+
+    tool1, tool2, tool3 = st.columns(3)
+    tool1.metric("Aktuális eszköz", f'#{int(wear_state.get("current_tool_number", 1))}')
+    tool2.metric(
+        "Karosszériák az eszközzel",
+        f'{int(wear_state.get("bodies_since_tool_change", 0))} / {tool_change_interval}',
+    )
+    tool3.metric("Végrehajtott eszközcserék", int(wear_state.get("tool_change_count", 0)))
+    progress = min(1.0, int(wear_state.get("bodies_since_tool_change", 0)) / max(1, tool_change_interval))
+    st.progress(progress, text="Eszközélettartam: elkészült karosszériák az aktuális eszközzel")
+    if not auto_tool_change_enabled and int(wear_state.get("bodies_since_tool_change", 0)) >= tool_change_interval:
+        st.warning("Az eszköz elérte a beállított csereintervallumot, de az automatikus csere ki van kapcsolva.")
+
     worker = st.session_state.get("auto_thread")
     production_active = worker is not None and worker.is_alive()
     if st.button(
-        "Elektróda cseréje / kopás nullázása",
+        "Kézi eszközcsere / kopás nullázása",
         key="reset_electrode_wear_v1",
         disabled=production_active,
-        help="A kopási számláló és a kopásmodell mutatói nullázódnak. Csak leállított gyártásnál érhető el.",
+        help="Új eszköznek veszi az elektródát, nullázza a kopást és az eszközönkénti számlálókat, és rögzíti a cserét. Csak leállított gyártásnál érhető el.",
     ):
-        state["wear_state"] = {
-            "wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
-            "correction_steps": 0, "uncorrectable_points": 0,
-        }
+        change = replace_electrode_tool(
+            wear_state,
+            reason="MANUAL",
+            body_id=str(state.get("last_sent_body_id") or ""),
+        )
+        log_tool_replacement(state, change, tool_change_interval)
         state["last_wear_summary"] = {}
-        safe_application_log("electrode_replaced_wear_reset", {"wear_percent": 0.0})
-        st.toast("Elektródacsere rögzítve; a kopási számláló nullázódott.")
+        st.toast("Kézi eszközcsere rögzítve; az új eszköz kopása 0%-ról indul.")
         st.rerun()
     if not wear_enabled:
-        st.caption("A kopásmodell kikapcsolva. A jelenlegi kopási állapot megmarad, de a minőségi mutatót nem rontja.")
+        st.caption("A kopásmodell kikapcsolva. Az eszközcsere számlálója ettől függetlenül számolja a lezárt karosszériákat.")
     elif auto_correct:
         st.caption("A vezérlő a 95%-os szintet próbálja elérni, kizárólag az Excel-katalógusban engedélyezett áram- és időtartományon belül. Ha ez nem sikerül, a monitor utómunkát rendel el.")
     else:
         st.caption("Önkorrekció nélkül a kopásból származó, célérték alatti minőség automatikusan utómunkát eredményez.")
-
 
 def start_automatic_production() -> None:
     """Start production only after the operator presses the start button."""
@@ -430,8 +510,8 @@ def start_automatic_production() -> None:
             "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
             "fault_mode": "within_limits", "speed_percent": DEFAULT_SPEED_PERCENT,
             "wear_enabled": True, "wear_per_point_percent": 0.03, "auto_correct_wear": True,
-            "wear_state": {"wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
-                           "correction_steps": 0, "uncorrectable_points": 0},
+            "auto_tool_change_enabled": True, "tool_change_interval_bodies": DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+            "wear_state": {},
             "session_started_at": st.session_state.get("app_session_started_at", time.time()),
             "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
             "error": None,
@@ -444,8 +524,9 @@ def start_automatic_production() -> None:
     state.setdefault("wear_enabled", True)
     state.setdefault("wear_per_point_percent", 0.03)
     state.setdefault("auto_correct_wear", True)
-    state.setdefault("wear_state", {"wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
-                                    "correction_steps": 0, "uncorrectable_points": 0})
+    state.setdefault("auto_tool_change_enabled", True)
+    state.setdefault("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)
+    state["wear_state"] = ensure_wear_state(state.setdefault("wear_state", {}))
     state["speed_percent"] = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
     state.setdefault("completed_cycles", 0)
     state.setdefault("session_started_at", st.session_state.get("app_session_started_at", time.time()))
@@ -471,6 +552,9 @@ def start_automatic_production() -> None:
         "electrode_wear_enabled": state["wear_enabled"],
         "wear_per_point_percent": state["wear_per_point_percent"],
         "auto_correct_wear": state["auto_correct_wear"],
+        "auto_tool_change_enabled": state["auto_tool_change_enabled"],
+        "tool_change_interval_bodies": state["tool_change_interval_bodies"],
+        "current_tool_number": state["wear_state"].get("current_tool_number", 1),
         "wear_percent_at_start": state["wear_state"].get("wear_percent", 0.0),
         "effective_publish_delay_ms": round(scaled_publish_delay_ms(PUBLISH_DELAY_MS, state["speed_percent"]), 4),
         "effective_inter_body_pause_seconds": round(scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, state["speed_percent"]), 4),
@@ -755,8 +839,8 @@ if "auto_state" not in st.session_state:
         "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
         "fault_mode": "within_limits", "speed_percent": DEFAULT_SPEED_PERCENT,
         "wear_enabled": True, "wear_per_point_percent": 0.03, "auto_correct_wear": True,
-        "wear_state": {"wear_percent": 0.0, "total_weld_points": 0, "corrected_points": 0,
-                       "correction_steps": 0, "uncorrectable_points": 0},
+        "auto_tool_change_enabled": True, "tool_change_interval_bodies": DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+        "wear_state": {},
         "session_started_at": st.session_state.get("app_session_started_at", time.time()),
         "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
         "error": None,
@@ -989,6 +1073,12 @@ def render_production_tab() -> None:
     if wear_payloads:
         st.caption(f"Utolsó pont állapota: {wear_payloads[-1].get('wear_quality_status', '—')} · "
                    f"szimulált minőségi mutató: {wear_payloads[-1].get('simulated_quality_index_percent', '—')}%")
+    st.caption(
+        f"Aktuális eszköz: #{int(wear_state.get('current_tool_number', 1))} · "
+        f"elkészült karosszériák az eszközzel: {int(wear_state.get('bodies_since_tool_change', 0))} / "
+        f"{int(auto_state.get('tool_change_interval_bodies', DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))} · "
+        f"eddigi eszközcserék: {int(wear_state.get('tool_change_count', 0))}"
+    )
 
     latest = body_events.iloc[-1] if not body_events.empty else None
     metric_cols = st.columns(4)
