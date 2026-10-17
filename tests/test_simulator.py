@@ -74,6 +74,8 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(MAX_NON_WEAR_DEFECT_PROBABILITY, 0.001)
         parameter = inspect.signature(generate_body_events).parameters["fault_rate"]
         self.assertEqual(parameter.default, 0.0)
+        background_parameter = inspect.signature(generate_body_events).parameters["non_wear_defect_probability"]
+        self.assertEqual(background_parameter.default, DEFAULT_NON_WEAR_DEFECT_PROBABILITY)
 
 
     def test_background_defect_probability_creates_non_wear_limit_breach(self):
