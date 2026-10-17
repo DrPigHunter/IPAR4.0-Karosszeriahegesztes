@@ -24,7 +24,7 @@ PowerShellben, a projekt gyökérmappájában:
 
 ```powershell
 py -3 -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 docker compose up -d mqtt
@@ -33,14 +33,14 @@ docker compose up -d mqtt
 Egy külön PowerShell ablakban indítsd el az adatfogadót és ellenőrzőt:
 
 ```powershell
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m src.monitor
 ```
 
 Egy másik ablakban indítsd el a kezelőfelületet:
 
 ```powershell
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 streamlit run src/dashboard.py
 ```
 
