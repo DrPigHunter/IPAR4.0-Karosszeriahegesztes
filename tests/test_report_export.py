@@ -47,6 +47,7 @@ class ReportExportTests(unittest.TestCase):
             fault_rate_percent=0.1,
             fault_mode="outside_limits",
             automatic_worker_stopped=True,
+            speed_percent=10_000,
             db_path=self.db_path,
             log_dir=self.log_dir,
             export_timestamp=timestamp,
@@ -58,6 +59,7 @@ class ReportExportTests(unittest.TestCase):
         self.assertEqual(info["session_body_count"], 1)
         self.assertEqual(info["session_pass_count"], 1)
         self.assertEqual(info["session_scrap_count"], 0)
+        self.assertEqual(info["speed_percent"], 10_000)
 
         workbook = load_workbook(BytesIO(data), read_only=True, data_only=True)
         required_sheets = {
@@ -76,6 +78,7 @@ class ReportExportTests(unittest.TestCase):
         self.assertEqual(metrics["Selejtes / utómunkás darab (db)"], 0)
         self.assertEqual(metrics["Pont-eltérés valószínűsége (%)"], 0.1)
         self.assertEqual(metrics["Eltérés módja"], "outside_limits")
+        self.assertEqual(metrics["Szimulációs sebesség (%)"], 10_000)
 
         logs = pd.read_excel(BytesIO(data), sheet_name="Alkalmazás-napló")
         self.assertIn("test_operator_action", set(logs["event"]))
