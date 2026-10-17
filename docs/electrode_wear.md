@@ -1,30 +1,37 @@
-# Elektródakopás és automatikus önkorrekció
+# Elektródakopás, önkorrekció és eszközcsere
 
-Ez a funkció külön fejlesztési ágban készült oktatási demonstrációként. Nem valódi hegesztőcellát vezérel, és az itt használt minőségi mutató nem igazolja a fizikai kötés szilárdságát.
+Ez a funkció oktatási célú szimuláció. Nem vezérel valódi hegesztőcellát, és a szintetikus minőségi mutató nem igazolja a hegesztési kötés mechanikai szilárdságát.
+
+A paraméterek értelmezéséről, műszaki hivatkozásairól és a valós gyártási recepthez szükséges korlátozásokról lásd a [paraméter-realizmus felülvizsgálatot](parameter_realism_audit.md).
 
 ## Folyamat
 
-1. A szimulátor ciklusok és hegesztési pontok között megőrzi az elektróda kopási állapotát.
-2. Minden pont után növeli a beállított kopási százalékot, és ebből egy szintetikus hőbeviteli/minőségi mutatót számol.
-3. Ha az érték a 95%-os célérték alatt van, az önkorrekció először az áramerősséget, majd — ha az áram elérte a katalógus határát — a hegesztési időt emeli.
-4. Minden módosítás az Excel-katalógus adott modellhez tartozó határértékein belül marad.
-5. Ha a célérték határértéken belül nem érhető el, az esemény `process_quality_ok=false` jelölést kap; a monitor minőségi hibát rögzít, és a teljes oldalfalat utómunkára irányítja.
+1. A szimulátor az elektróda állapotát hegesztési pontokon és karosszériaciklusokon át vezeti, és a kopottságot az alkalmazás újraindítása után is megőrzi.
+2. A relatív hőbeviteli proxy elektromos része az (I^2 t) összefüggésre épül. A kopási és hűtési hatás egy egyszerű, állítható paraméterű szimulációs heurisztika, nem validált fizikai modell.
+3. Ha a proxy a demonstrációs 95%-os célérték alá kerül, a vezérlés az áramerősséget 0,1 kA-os lépésekben, majd szükség esetén a hegesztési időt 5 ms-os lépésekben emeli. Az Excel-katalógus adott modellhez tartozó határértékeit nem lépheti át.
+4. Szándékosan, a határértékeken túlra injektált teszthibát az önkorrekció nem rejthet el. Ha a minőségi proxy határértékeken belül sem áll helyre, a monitor minőségi hibát rögzít, és az egész oldalfalat utómunkára küldi.
+5. A hűtési feltételek (áramlás és belépő/kilépő vízhőmérséklet) ellenőrzése a TWI referenciaértékeihez viszonyít. Kedvezőtlen hűtés figyelmeztetést vált ki és növeli a szimulált kopási stresszt.
 
-A vezérlő nem módosítja automatikusan az elektródaerőt, és nem írja át az Excel-referenciakatalógust. A kopási ráta, a minőségi index és a célérték szintetikus paraméterek, nem ipari receptértékek.
+## Automatikus eszközcsere a szünetben
 
-## Kezelőfelület
+A **Statisztika és utómunka** fülön beállítható:
+- a kopásmodellezés és az önkorrekció;
+- a kopás szimulációs üteme pontonként;
+- a hűtővíz-áramlás és a hőmérsékletek;
+- az automatikus eszközcsere be-/kikapcsolása;
+- az eszközcsere-intervallum, teljes baloldalfal-ciklusban;
+- a csere szimulált időtartama.
 
-A **Statisztika és utómunka** fülön állítható:
-- a kopásmodell be-/kikapcsolása;
-- a kopás üteme hegesztési pontonként;
-- az automatikus önkorrekció be-/kikapcsolása.
+A csereintervallum elérésekor a rendszer nem nullázza azonnal a kopást. A jelenlegi oldalfal befejezése után a következő ciklusok közötti szünetben futtatja a cserét. A csere a rendelkezésre álló szünetből fogyaszt időt; ha a szimulált csere tovább tart, mint a normál szünet, a leállás meghosszabbodik. A művelet naplózása után az eszköz sorszáma növekszik, az aktuális kopottság és az adott eszközre vonatkozó számlálók 0-ra állnak. A teljes élettartam-számlálók megmaradnak.
 
-A panel mutatja a felhalmozott kopást, a pontszámot, a sikeres korrekciók és a sikertelen korrekciók darabszámát. Az **Elektróda cseréje / kopás nullázása** gomb csak leállított gyártásnál használható, és naplózza a szimulált elektródacserét. Az élő gyártás panel karosszériánként jeleníti meg a korrigált pontokat, a korrekciós lépések számát és a sikertelen pontokat. A részletes hegesztési esemény a SQLite `raw_json` mezőjében marad meg, így az Excel-kiadásban is elérhető.
+Ha az automatikus eszközcsere ki van kapcsolva, az intervallum elérésekor a gyártás megáll, és a kezelőnek kell elvégeznie a kézi cserét. A rendszer nem enged új gyártási ciklust, amíg a szükséges csere nincs rögzítve.
 
-## Teszt
+A kopás, az aktuális eszköz sorszáma, a függőben lévő csere és a karbantartási beállítások a `data/equipment_state.json` fájlban is megmaradnak a dashboard újraindítása után. A csereesemények az alkalmazásnaplóban és az Excel `Eszközcsere-napló` munkalapján is láthatók.
+
+## Tesztek
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-A `tests/test_wear_control.py` ellenőrzi a kopás felhalmozását, a beállítások kikapcsolt állapotát, a határértékek megtartását és azt, hogy a sikertelen korrekciót a monitor utómunkára küldi.
+A tesztek lefedik a kopás felhalmozását, határértékeken belüli önkorrekciót, szándékos határátlépés megőrzését, hűtési riasztásokat, szünetben végrehajtott eszközcserét, állapotmegőrzést és Excel-exportot.
