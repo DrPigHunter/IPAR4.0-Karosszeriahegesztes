@@ -35,8 +35,17 @@ from src.speed_control import (
     normalize_speed_percent, scaled_inter_body_pause_seconds, scaled_publish_delay_ms,
 )
 from src.monitor_wait import MonitorCompletionTimeout, wait_for_body_completion
+from src.equipment_state import load_equipment_state, save_equipment_state
 from src.wear_control import (
+    COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    COOLANT_INLET_TARGET_MAX_C,
+    COOLANT_OUTLET_TARGET_MAX_C,
+    DEFAULT_TOOL_CHANGE_DURATION_SECONDS,
     DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    DEFAULT_WEAR_PER_POINT_PERCENT,
+    MIN_TOOL_CHANGE_DURATION_SECONDS,
+    MAX_TOOL_CHANGE_DURATION_SECONDS,
+    cooling_condition,
     ensure_wear_state,
     register_completed_body_for_tool,
     replace_electrode_tool,
@@ -152,56 +161,109 @@ def json_list(value: Any) -> list[str]:
         return []
 
 
+def persist_equipment_state(state: dict[str, Any]) -> None:
+    """Best-effort durable persistence for equipment state/settings."""
+    try:
+        save_equipment_state(state)
+    except (OSError, TypeError, ValueError) as exc:
+        safe_application_log("equipment_state_persistence_failed", {"error": str(exc)}, level="WARNING")
+
+
 def log_tool_replacement(
     state: dict[str, Any],
     change: dict[str, Any],
     interval_bodies: int,
+    *,
+    execution_window: str,
+    simulated_duration_seconds: float = 0.0,
+    scheduled_pause_seconds: float | None = None,
 ) -> None:
-    """Persist automatic/manual tool-change details for the dashboard and Excel export."""
+    """Persist the tool replacement and its maintenance window for audit/export."""
     details = {
         **change,
         "replacement_interval_bodies": int(interval_bodies),
         "new_tool_wear_starts_at_percent": 0.0,
+        "execution_window": execution_window,
+        "simulated_change_duration_seconds": round(float(simulated_duration_seconds), 3),
+        "scheduled_inter_body_pause_seconds": (
+            round(float(scheduled_pause_seconds), 3) if scheduled_pause_seconds is not None else None
+        ),
     }
     state["last_tool_change"] = details
+    state["tool_change_required"] = False
     safe_application_log("electrode_tool_replaced", details)
+    persist_equipment_state(state)
 
 
 def automatic_production_worker(
     stop_event: threading.Event, state: dict[str, Any], config_ids: list[str]
 ) -> None:
-    """Publish a randomly selected sidewall, then wait 10 seconds between bodies."""
+    """Publish one simulated sidewall at a time; do maintenance during the inter-body break."""
     state["running"] = True
     previous_config = ""
     while not stop_event.is_set():
         wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
         tool_change_interval = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
         auto_tool_change_enabled = bool(state.get("auto_tool_change_enabled", True))
-        due_change = replace_tool_if_due(
-            wear_state,
-            tool_change_interval,
-            enabled=auto_tool_change_enabled,
-            body_id=str(state.get("last_sent_body_id") or ""),
-        )
-        if due_change is not None:
-            log_tool_replacement(state, due_change, tool_change_interval)
+
+        # If the app/worker was restarted with a pending replacement, do it during
+        # the already-existing downtime before allowing another body to start.
+        if wear_state.get("tool_change_pending") or int(wear_state.get("bodies_since_tool_change", 0)) >= tool_change_interval:
+            if auto_tool_change_enabled:
+                due_change = replace_tool_if_due(
+                    wear_state,
+                    tool_change_interval,
+                    enabled=True,
+                    body_id=str(state.get("last_sent_body_id") or wear_state.get("pending_tool_change_body_id") or ""),
+                    reason="AUTO_AFTER_DOWNTIME",
+                )
+                if due_change is not None:
+                    log_tool_replacement(
+                        state, due_change, tool_change_interval,
+                        execution_window="startup_or_restart_downtime",
+                    )
+            else:
+                state["tool_change_required"] = True
+                state["running"] = False
+                stop_event.set()
+                safe_application_log("automatic_production_blocked_tool_change_required", {
+                    "body_id": wear_state.get("pending_tool_change_body_id", ""),
+                    "current_tool_number": wear_state.get("current_tool_number", 1),
+                    "bodies_since_tool_change": wear_state.get("bodies_since_tool_change", 0),
+                    "replacement_interval_bodies": tool_change_interval,
+                }, level="WARNING")
+                persist_equipment_state(state)
+                break
+
+        if stop_event.is_set():
+            break
         options = [value for value in config_ids if value != previous_config] or config_ids
         config_id = random.choice(options)
         previous_config = config_id
         fault_rate = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
         fault_mode = str(state.get("fault_mode", "within_limits"))
         wear_enabled = bool(state.get("wear_enabled", True))
-        wear_per_point_percent = float(state.get("wear_per_point_percent", 0.03))
+        wear_per_point_percent = float(state.get("wear_per_point_percent", DEFAULT_WEAR_PER_POINT_PERCENT))
         auto_correct_wear = bool(state.get("auto_correct_wear", True))
-        wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
+        coolant_flow_l_min = float(state.get("coolant_flow_l_min", COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN))
+        coolant_inlet_temp_c = float(state.get("coolant_inlet_temp_c", COOLANT_INLET_TARGET_MAX_C))
+        coolant_outlet_temp_c = float(state.get("coolant_outlet_temp_c", COOLANT_OUTLET_TARGET_MAX_C))
+        tool_change_duration = min(
+            MAX_TOOL_CHANGE_DURATION_SECONDS,
+            max(MIN_TOOL_CHANGE_DURATION_SECONDS, float(state.get(
+                "tool_change_duration_seconds", DEFAULT_TOOL_CHANGE_DURATION_SECONDS
+            ))),
+        )
+        publish_delay_ms = scaled_publish_delay_ms(
+            PUBLISH_DELAY_MS, normalize_speed_percent(state.get("speed_percent", DEFAULT_SPEED_PERCENT))
+        )
         speed_percent = normalize_speed_percent(state.get("speed_percent", DEFAULT_SPEED_PERCENT))
-        publish_delay_ms = scaled_publish_delay_ms(PUBLISH_DELAY_MS, speed_percent)
         inter_body_pause_seconds = scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent)
         cycle_started = time.monotonic()
         body_id = ""
+        monitor_confirmed = False
         try:
-            # Streamlit reruns the dashboard but may keep imported modules cached.
-            # Reload the simulator module so changes pulled from Git are picked up here too.
+            # Reload lets a local Git pull update the simulator when Streamlit has cached it.
             importlib.reload(simulator_module)
             body_id, events = simulator_module.generate_body_events(
                 config_id,
@@ -211,6 +273,9 @@ def automatic_production_worker(
                 wear_per_point_percent=wear_per_point_percent,
                 wear_enabled=wear_enabled,
                 auto_correct_wear=auto_correct_wear,
+                coolant_flow_l_min=coolant_flow_l_min,
+                coolant_inlet_temp_c=coolant_inlet_temp_c,
+                coolant_outlet_temp_c=coolant_outlet_temp_c,
             )
             wear_summary = events[-1].get("electrode_wear_summary", {})
             state["body_id"] = body_id
@@ -229,22 +294,28 @@ def automatic_production_worker(
                 "electrode_wear_enabled": wear_enabled,
                 "wear_per_point_percent": wear_per_point_percent,
                 "auto_correct_wear": auto_correct_wear,
+                "coolant_flow_l_min": coolant_flow_l_min,
+                "coolant_inlet_temp_c": coolant_inlet_temp_c,
+                "coolant_outlet_temp_c": coolant_outlet_temp_c,
+                "cooling_alerts": (wear_summary.get("cooling") or {}).get("alerts", []),
                 "current_tool_number": wear_state.get("current_tool_number", 1),
                 "bodies_since_tool_change": wear_state.get("bodies_since_tool_change", 0),
                 "tool_change_interval_bodies": tool_change_interval,
+                "tool_change_duration_seconds": tool_change_duration,
                 "automatic_tool_change_enabled": auto_tool_change_enabled,
                 "wear_percent_after_cycle_generation": wear_summary.get("wear_percent", wear_state.get("wear_percent", 0.0)),
                 "predicted_corrected_points": wear_summary.get("corrected_points", 0),
                 "predicted_uncorrectable_points": wear_summary.get("uncorrectable_points", 0),
             })
             simulator_module.publish_events(events, delay_ms=publish_delay_ms)
-            # Broker PUBACK only confirms broker receipt. Wait until the monitor has
-            # committed the final quality status, so we don't outrun SQLite at high speed.
+            # A broker PUBACK is not completion; wait for the monitor's committed verdict.
             monitor_result = wait_for_body_completion(body_id, DB_PATH, timeout_seconds=30.0)
+            monitor_confirmed = True
             elapsed = round(time.monotonic() - cycle_started, 3)
             state["completed_cycles"] = int(state.get("completed_cycles", 0)) + 1
             state["last_sent_body_id"] = body_id
             state["last_monitor_status"] = monitor_result["status"]
+            state["last_wear_summary"] = wear_summary
             safe_application_log("body_cycle_completed", {
                 "body_id": body_id,
                 "config_id": config_id,
@@ -264,29 +335,32 @@ def automatic_production_worker(
                 "correction_steps": wear_summary.get("correction_steps", 0),
                 "uncorrectable_points": wear_summary.get("uncorrectable_points", 0),
                 "quality_target_percent": wear_summary.get("quality_target_percent"),
+                "current_tool_number": wear_state.get("current_tool_number", 1),
             })
-            state["last_wear_summary"] = wear_summary
-            tool_change_interval = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
-            auto_tool_change_enabled = bool(state.get("auto_tool_change_enabled", True))
-            change = register_completed_body_for_tool(
+            scheduled_change = register_completed_body_for_tool(
                 wear_state,
                 tool_change_interval,
                 enabled=auto_tool_change_enabled,
                 body_id=body_id,
             )
-            if change is not None:
-                log_tool_replacement(state, change, tool_change_interval)
+            if scheduled_change is not None:
+                state["tool_change_required"] = not auto_tool_change_enabled
+                safe_application_log("electrode_tool_change_scheduled", {
+                    **scheduled_change,
+                    "replacement_interval_bodies": tool_change_interval,
+                    "automatic_tool_change_enabled": auto_tool_change_enabled,
+                    "planned_execution_window": "next_inter_body_pause",
+                    "simulated_change_duration_seconds": tool_change_duration,
+                }, level="INFO" if auto_tool_change_enabled else "WARNING")
+            persist_equipment_state(state)
         except Exception as exc:
             detail = str(exc)
             if "unexpected keyword argument 'fault_mode'" in detail:
                 detail = (
-                    "A szimulátor régi Python-modulja van betöltve. A rendszer megpróbálja "
-                    "újratölteni a src/simulator.py fájlt a következő ciklus előtt. "
+                    "A szimulátor régi Python-modulja van betöltve. Ellenőrizd a src/simulator.py frissítését. "
                     f"Részlet: {detail}"
                 )
             state["error"] = detail
-            # Fail safe on any generation, publishing, or monitor-finalization error.
-            # A retry loop at 10,000% could otherwise spam MQTT and leave many partial bodies.
             stop_event.set()
             safe_application_log("automatic_production_halted_after_error", {
                 "body_id": body_id,
@@ -302,14 +376,67 @@ def automatic_production_worker(
                 "speed_percent": speed_percent,
                 "electrode_wear_enabled": wear_enabled,
                 "wear_percent": wear_state.get("wear_percent", 0.0),
+                "coolant_flow_l_min": coolant_flow_l_min,
+                "coolant_inlet_temp_c": coolant_inlet_temp_c,
+                "coolant_outlet_temp_c": coolant_outlet_temp_c,
                 "effective_publish_delay_ms": round(publish_delay_ms, 4),
                 "effective_inter_body_pause_seconds": round(inter_body_pause_seconds, 4),
                 "error": detail,
                 "monitor_completion_timeout": isinstance(exc, MonitorCompletionTimeout),
+                "monitor_confirmed_before_failure": monitor_confirmed,
                 "elapsed_seconds": round(time.monotonic() - cycle_started, 3),
             }, level="ERROR")
-        # A full cycle must finish before the separate 10-second inter-body pause begins.
-        stop_event.wait(inter_body_pause_seconds)
+
+        # If an interval has been reached, the old tool is not reset at end-of-cycle.
+        # The next break is used for the replacement, which consumes this pause time.
+        wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
+        if wear_state.get("tool_change_pending") and bool(state.get("auto_tool_change_enabled", True)):
+            tool_change_duration = min(
+                MAX_TOOL_CHANGE_DURATION_SECONDS,
+                max(MIN_TOOL_CHANGE_DURATION_SECONDS, float(state.get(
+                    "tool_change_duration_seconds", DEFAULT_TOOL_CHANGE_DURATION_SECONDS
+                ))),
+            )
+            pause_started = time.monotonic()
+            safe_application_log("electrode_tool_change_started", {
+                "body_id": wear_state.get("pending_tool_change_body_id", body_id),
+                "current_tool_number": wear_state.get("current_tool_number", 1),
+                "simulated_change_duration_seconds": tool_change_duration,
+                "planned_inter_body_pause_seconds": inter_body_pause_seconds,
+            })
+            # A deliberate short simulated maintenance task; if longer than the
+            # configured pause, it extends the downtime rather than being cut short.
+            time.sleep(tool_change_duration)
+            change = replace_tool_if_due(
+                wear_state,
+                int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)),
+                enabled=True,
+                body_id=str(wear_state.get("pending_tool_change_body_id") or body_id),
+                reason="AUTO_DURING_BREAK",
+            )
+            if change is not None:
+                log_tool_replacement(
+                    state, change,
+                    int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)),
+                    execution_window="inter_body_pause",
+                    simulated_duration_seconds=tool_change_duration,
+                    scheduled_pause_seconds=inter_body_pause_seconds,
+                )
+            remaining_pause = max(0.0, inter_body_pause_seconds - (time.monotonic() - pause_started))
+            if remaining_pause > 0:
+                stop_event.wait(remaining_pause)
+        elif wear_state.get("tool_change_pending"):
+            state["tool_change_required"] = True
+            stop_event.set()
+            safe_application_log("automatic_production_paused_for_manual_tool_change", {
+                "body_id": wear_state.get("pending_tool_change_body_id", body_id),
+                "current_tool_number": wear_state.get("current_tool_number", 1),
+                "bodies_since_tool_change": wear_state.get("bodies_since_tool_change", 0),
+                "replacement_interval_bodies": int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)),
+            }, level="WARNING")
+            persist_equipment_state(state)
+        else:
+            stop_event.wait(inter_body_pause_seconds)
     state["running"] = False
 
 
