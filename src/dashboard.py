@@ -324,6 +324,8 @@ def render_production_tab() -> None:
     rework = all_rework[all_rework["body_id"].astype(str).isin(session_ids)].copy() if not all_rework.empty else all_rework
     auto_state = st.session_state["auto_state"]
     stop_event = st.session_state["auto_stop_event"]
+    worker = st.session_state.get("auto_thread")
+    worker_alive = worker is not None and worker.is_alive()
     running = bool(auto_state.get("running")) and not stop_event.is_set()
 
     head_left, head_right = st.columns([5, 1.3], vertical_alignment="center")
@@ -336,6 +338,14 @@ def render_production_tab() -> None:
                 stop_event.set()
                 st.toast("Az automatikus gyártás leállítása elküldve.")
                 st.rerun(scope="fragment")
+        elif worker_alive:
+            st.button(
+                "… Gyártási ciklus lezárása",
+                key="auto_stopping",
+                disabled=True,
+                use_container_width=True,
+                help="A már megkezdett karosszéria feldolgozása biztonságosan befejeződik.",
+            )
         else:
             if st.button("▶  Automatika indítása", key="start_auto", type="primary", use_container_width=True):
                 start_automatic_production()
@@ -351,7 +361,7 @@ def render_production_tab() -> None:
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Feldolgozott oldalfalak", f"{total:,}".replace(",", " "))
     k2.metric("Megfelelt", f"{good_count:,}".replace(",", " "), delta=f"{pass_pct:.1f}% megfelelési arány")
-    k3.metric("Utómunka / selejt", f"{failed_count:,}".replace(",", " "))
+    k3.metric("Selejtes oldalfalak (db)", f"{failed_count:,}".replace(",", " "))
     k4.metric("Nyitott utómunka", f"{open_count:,}")
 
     body_id = str(auto_state.get("body_id") or "")
