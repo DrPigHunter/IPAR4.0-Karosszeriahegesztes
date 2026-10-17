@@ -5,7 +5,6 @@ from dataclasses import replace
 
 from src.catalog import list_configurations
 from src.parameter_audit import build_parameter_audit
-from src.rules import Limits
 
 
 class ParameterAuditTests(unittest.TestCase):
@@ -19,7 +18,7 @@ class ParameterAuditTests(unittest.TestCase):
         self.assertTrue(all(row["Időhatár min (ms)"] > 0 for row in rows))
         self.assertTrue(all(row["Erőhatár min (kN)"] > 0 for row in rows))
         self.assertTrue(all(row["Referencia-ellenőrzés"] in {
-            "FELÜLVIZSGÁLAT", "PLAUSZIBILIS, NEM HITLESÍTETT"
+            "FELÜLVIZSGÁLAT", "PLAUZIBILIS, NEM IGAZOLT"
         } for row in rows))
 
     def test_audit_flags_out_of_envelope_current_and_force_without_rewriting_recipe(self):
