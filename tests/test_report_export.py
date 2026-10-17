@@ -88,7 +88,7 @@ class ReportExportTests(unittest.TestCase):
             "Összesítő", "Modellenként", "Karosszériák", "Hegesztési adatok",
             "Utómunka sor", "Utómunka műveletek", "Rendszerhibák",
             "Futásnaplók", "Napi JSONL", "Összesített JSON", "Alkalmazás-napló",
-            "Konzolnapló", "Beállítások", "Kopás és önkorrekció", "Eszközcsere-napló",
+            "Konzolnapló", "Beállítások", "Kopás és önkorrekció", "Eszközcsere-napló", "Paraméter-audit",
         }
         self.assertTrue(required_sheets.issubset(set(workbook.sheetnames)))
         self.assertEqual(workbook["Karosszériák"].max_row, 2)
@@ -164,7 +164,7 @@ class ReportExportTests(unittest.TestCase):
         self.assertEqual(setting_values["Kopás hegesztési pontonként (%)"], 0.03)
         self.assertEqual(setting_values["Automatikus önkorrekció"], True)
         self.assertEqual(setting_values["Automatikus eszközcsere"], True)
-        self.assertEqual(setting_values["Eszközcsere minden X karosszéria után"], 2)
+        self.assertEqual(setting_values["Eszközcsere minden X oldalfalciklus után"], 2)
 
         tool_changes = pd.read_excel(BytesIO(data), sheet_name="Eszközcsere-napló")
         self.assertEqual(len(tool_changes), 1)
