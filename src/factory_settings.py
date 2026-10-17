@@ -19,6 +19,13 @@ from src.wear_control import (
 
 DEFAULT_FAULT_RATE = 0.0
 
+# One simulated shift-break checkpoint per 100 completed sidewalls. With roughly
+# 140 weld points per sidewall this is ~14,000 weld points, near the order of
+# magnitude discussed by the CORDIS SmartDress development target. This is a
+# simulation cadence, not a universal real-world shift or electrode-life rule.
+SHIFT_BREAK_INTERVAL_BODIES = DEFAULT_TOOL_CHANGE_INTERVAL_BODIES
+SHIFT_BREAK_APPROX_WELD_POINTS = 14_000
+
 # These are deliberately not exposed as UI inputs.
 FACTORY_EQUIPMENT_SETTINGS: dict[str, Any] = {
     "fault_rate": DEFAULT_FAULT_RATE,
@@ -27,7 +34,7 @@ FACTORY_EQUIPMENT_SETTINGS: dict[str, Any] = {
     "wear_per_point_percent": DEFAULT_WEAR_PER_POINT_PERCENT,
     "auto_correct_wear": True,
     "auto_tool_change_enabled": True,
-    "tool_change_interval_bodies": DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    "tool_change_interval_bodies": SHIFT_BREAK_INTERVAL_BODIES,
     "tool_change_duration_seconds": DEFAULT_TOOL_CHANGE_DURATION_SECONDS,
     "coolant_flow_l_min": COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     "coolant_inlet_temp_c": COOLANT_INLET_TARGET_MAX_C,
@@ -36,5 +43,9 @@ FACTORY_EQUIPMENT_SETTINGS: dict[str, Any] = {
 
 
 def apply_factory_settings(state: MutableMapping[str, Any]) -> None:
-    """Replace saved/legacy process settings with the code-defined defaults."""
+    """Replace saved/legacy process settings with the code-defined defaults.
+
+    The head/ electrode assembly is replaced after the configured number of
+    sidewalls, during the following simulated downtime window.
+    """
     state.update(FACTORY_EQUIPMENT_SETTINGS)
