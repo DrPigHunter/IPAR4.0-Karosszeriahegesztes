@@ -17,7 +17,12 @@ from src.wear_control import (
     DEFAULT_WEAR_PER_POINT_PERCENT,
 )
 
-DEFAULT_FAULT_RATE = 0.0
+DEFAULT_FAULT_RATE = 0.0  # Deliberate test fault injection; off by default.
+
+# Synthetic background failure probability independent of electrode wear:
+# 0.01% per weld point (1 in 10,000). This is a demo assumption, NOT an
+# industry-wide measured defect rate. See docs/parameter_realism_audit.md.
+DEFAULT_NON_WEAR_DEFECT_PROBABILITY = 0.0001
 
 # One simulated shift-break checkpoint per 100 completed sidewalls. With roughly
 # 140 weld points per sidewall this is ~14,000 weld points, near the order of
@@ -29,6 +34,7 @@ SHIFT_BREAK_APPROX_WELD_POINTS = 14_000
 # These are deliberately not exposed as UI inputs.
 FACTORY_EQUIPMENT_SETTINGS: dict[str, Any] = {
     "fault_rate": DEFAULT_FAULT_RATE,
+    "non_wear_defect_probability": DEFAULT_NON_WEAR_DEFECT_PROBABILITY,
     "fault_mode": "within_limits",
     "wear_enabled": True,
     "wear_per_point_percent": DEFAULT_WEAR_PER_POINT_PERCENT,
