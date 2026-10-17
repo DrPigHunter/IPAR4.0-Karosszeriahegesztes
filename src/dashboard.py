@@ -37,6 +37,7 @@ from src.speed_control import (
 )
 from src.monitor_wait import MonitorCompletionTimeout, wait_for_body_completion
 from src.equipment_state import load_equipment_state, save_equipment_state
+from src.factory_settings import DEFAULT_FAULT_RATE, apply_factory_settings
 from src.wear_control import (
     COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     COOLANT_INLET_TARGET_MAX_C,
@@ -55,7 +56,6 @@ from src.wear_control import (
 
 BETWEEN_BODIES_PAUSE_SECONDS = 10.0
 PUBLISH_DELAY_MS = 90  # milliseconds per weld result; 142 points take about 13 seconds
-DEFAULT_FAULT_RATE = 0.0
 
 st.set_page_config(
     page_title="BODYLINE | Ipar 4.0",
@@ -203,6 +203,7 @@ def automatic_production_worker(
     state["running"] = True
     previous_config = ""
     while not stop_event.is_set():
+        apply_factory_settings(state)
         wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
         tool_change_interval = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
         auto_tool_change_enabled = bool(state.get("auto_tool_change_enabled", True))
@@ -452,268 +453,6 @@ def session_bodies_only(bodies: pd.DataFrame) -> pd.DataFrame:
     return bodies.loc[started_at >= session_start - pd.Timedelta(seconds=2)].copy()
 
 
-def render_fault_controls() -> None:
-    """Let the operator configure injected faults before starting production."""
-    st.markdown("### Pontonkénti eltérés beállítása")
-    rate_col, mode_col = st.columns([1, 1])
-    with rate_col:
-        fault_rate_percent = st.slider(
-            "Egy hegesztési pont eltérésének esélye (%)",
-            min_value=0.0,
-            max_value=0.1,
-            value=0.0,
-            step=0.001,
-            format="%.3f%%",
-            key="fault_rate_percent_v3",
-            help="0,000% esetén nincs mesterséges eltérés. A beállítás minden hegesztési pontra külön érvényes.",
-        )
-    with mode_col:
-        fault_mode_label = st.selectbox(
-            "Az eltérés viselkedése",
-            options=[
-                "Megengedett tartományon belül marad (megfelelő)",
-                "Átlépi a határértéket (utómunka)",
-            ],
-            index=0,
-            key="fault_mode_choice_v3",
-            help=(
-                "Az első mód a mérési értéket a megengedett határon belül tartja. "
-                "A második mód a kiválasztott ponton szándékosan határértéken kívüli értéket hoz létre."
-            ),
-        )
-    st.session_state["selected_fault_rate"] = float(fault_rate_percent) / 100.0
-    st.session_state["selected_fault_mode"] = (
-        "outside_limits" if fault_mode_label.startswith("Átlépi") else "within_limits"
-    )
-    st.session_state["auto_state"]["fault_rate"] = st.session_state["selected_fault_rate"]
-    st.session_state["auto_state"]["fault_mode"] = st.session_state["selected_fault_mode"]
-    current_fault_settings = (
-        round(float(fault_rate_percent), 3),
-        st.session_state["selected_fault_mode"],
-    )
-    previous_fault_settings = st.session_state.get("last_logged_fault_settings")
-    if previous_fault_settings != current_fault_settings:
-        safe_application_log("fault_test_settings_changed", {
-            "fault_rate_percent": current_fault_settings[0],
-            "fault_mode": current_fault_settings[1],
-        })
-        st.session_state["last_logged_fault_settings"] = current_fault_settings
-    mode_description = (
-        "a kijelölt eltérés határértéken kívülre kerül (utómunka várható)"
-        if st.session_state["auto_state"]["fault_mode"] == "outside_limits"
-        else "a kijelölt eltérés a határértéken belül marad (megfelelő)"
-    )
-    st.caption(f"Beállítva: {fault_rate_percent:.3f}% pontonként · {mode_description}. Az értékek indításig módosíthatók.")
-
-
-def render_wear_controls() -> None:
-    """Configure the simulated wear, cooling conditions, and tool maintenance interval."""
-    state = st.session_state["auto_state"]
-    worker = st.session_state.get("auto_thread")
-    production_active = worker is not None and worker.is_alive()
-
-    st.markdown("### Elektródakopás, hűtés, önkorrekció és eszközcsere")
-    st.caption(
-        "A katalógusban lévő pontprogram a modell receptje. A kopás- és hűtési paraméterek "
-        "demonstrációs beállítások; valódi soron az adott anyaghoz és lemezvastagsághoz kell kalibrálni."
-    )
-    wear_col, rate_col, correction_col = st.columns([1.0, 1.2, 1.2])
-    with wear_col:
-        wear_enabled = st.checkbox(
-            "Kopás modellezése",
-            value=bool(state.get("wear_enabled", True)),
-            key="electrode_wear_enabled_v1",
-            disabled=production_active,
-            help="A kopás a ciklusokon keresztül felhalmozódik, és befolyásolja a szintetikus hőbeviteli mutatót.",
-        )
-    with rate_col:
-        wear_per_point_percent = st.slider(
-            "Kopás hegesztési pontonként (%)",
-            min_value=0.0,
-            max_value=0.05,
-            value=float(state.get("wear_per_point_percent", DEFAULT_WEAR_PER_POINT_PERCENT)),
-            step=0.001,
-            format="%.3f%%",
-            key="electrode_wear_rate_v2",
-            disabled=production_active,
-            help="Szimulációs kopási index, nem ipari méréssel meghatározott anyagveszteség. Alapérték: 0,005% / pont.",
-        )
-    with correction_col:
-        auto_correct = st.checkbox(
-            "Automatikus önkorrekció",
-            value=bool(state.get("auto_correct_wear", True)),
-            key="electrode_auto_correction_v1",
-            disabled=production_active,
-            help="Az áram lépéses emelése után szükség esetén a hegesztési idő nő; a katalógus határait nem lépheti át.",
-        )
-
-    st.markdown("#### Hűtővíz – állapotfigyelés")
-    cool_flow_col, cool_in_col, cool_out_col = st.columns(3)
-    with cool_flow_col:
-        coolant_flow_l_min = st.number_input(
-            "Hűtővíz-áramlás (l/perc)",
-            min_value=0.0, max_value=30.0, step=0.5,
-            value=float(state.get("coolant_flow_l_min", COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN)),
-            key="coolant_flow_l_min_v1",
-            disabled=production_active,
-            help="TWI bevonatos/vastagabb acélhoz legalább 6 l/perc referenciát ajánl.",
-        )
-    with cool_in_col:
-        coolant_inlet_temp_c = st.number_input(
-            "Belépő hűtővíz (°C)",
-            min_value=-10.0, max_value=80.0, step=1.0,
-            value=float(state.get("coolant_inlet_temp_c", COOLANT_INLET_TARGET_MAX_C)),
-            key="coolant_inlet_temp_v1",
-            disabled=production_active,
-            help="A TWI referenciaérték 20 °C-ot meg nem haladó belépő hőmérséklet.",
-        )
-    with cool_out_col:
-        coolant_outlet_temp_c = st.number_input(
-            "Kilépő hűtővíz (°C)",
-            min_value=-10.0, max_value=100.0, step=1.0,
-            value=float(state.get("coolant_outlet_temp_c", COOLANT_OUTLET_TARGET_MAX_C)),
-            key="coolant_outlet_temp_v1",
-            disabled=production_active,
-            help="A TWI referenciaérték 30 °C-ot meg nem haladó kilépő hőmérséklet.",
-        )
-    cooling = cooling_condition(coolant_flow_l_min, coolant_inlet_temp_c, coolant_outlet_temp_c)
-    if cooling["alerts"]:
-        for alert in cooling["alerts"]:
-            st.warning(alert)
-        st.caption(
-            f"A szimuláció a kedvezőtlen hűtési feltételeknél magasabb kopási ütemet modellez "
-            f"(becsült kopási stressztényező: {cooling['wear_stress_factor']:.2f}×). "
-            "Ez egy átlátható heurisztika, nem hitelesített termikus modell."
-        )
-    else:
-        st.success("A megadott hűtési értékek elérik a kiválasztott bevonatos acél referenciafeltételeit.")
-
-    st.markdown("#### Tervezett eszközcsere")
-    change_enabled_col, change_interval_col, change_duration_col = st.columns([1.0, 1.35, 1.2])
-    with change_enabled_col:
-        auto_tool_change_enabled = st.checkbox(
-            "Automatikus eszközcsere",
-            value=bool(state.get("auto_tool_change_enabled", True)),
-            key="automatic_tool_change_enabled_v1",
-            disabled=production_active,
-            help="Az X-edik befejezett oldalfalciklus után a csere a következő ciklusok közötti szünetben történik.",
-        )
-    with change_interval_col:
-        tool_change_interval = int(st.number_input(
-            "Eszközcsere minden X oldalfal után",
-            min_value=1, max_value=10_000,
-            value=int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)),
-            step=1,
-            key="tool_change_interval_bodies_v1",
-            disabled=production_active,
-            help="Egy ciklus egy bal oldalfalat jelöl. 100 ciklus kb. 14 000 hegesztési pont 140 pont/ciklussal; ez nagyságrendileg összevethető a CORDIS SmartDress 10–30 ezer pontos fejlesztési céljával, de nem univerzális csereelőírás.",
-        ))
-    with change_duration_col:
-        tool_change_duration_seconds = st.number_input(
-            "Szimulált csereidő (mp)",
-            min_value=MIN_TOOL_CHANGE_DURATION_SECONDS,
-            max_value=MAX_TOOL_CHANGE_DURATION_SECONDS,
-            step=0.5,
-            value=float(state.get("tool_change_duration_seconds", DEFAULT_TOOL_CHANGE_DURATION_SECONDS)),
-            key="tool_change_duration_seconds_v1",
-            disabled=production_active,
-            help="A csere ezt az időt használja fel a szünetből; ha hosszabb a normál szünetnél, a leállás ennyivel hosszabb lesz.",
-        )
-
-    state["wear_enabled"] = bool(wear_enabled)
-    state["wear_per_point_percent"] = float(wear_per_point_percent)
-    state["auto_correct_wear"] = bool(auto_correct)
-    state["auto_tool_change_enabled"] = bool(auto_tool_change_enabled)
-    state["tool_change_interval_bodies"] = int(tool_change_interval)
-    state["tool_change_duration_seconds"] = float(tool_change_duration_seconds)
-    state["coolant_flow_l_min"] = float(coolant_flow_l_min)
-    state["coolant_inlet_temp_c"] = float(coolant_inlet_temp_c)
-    state["coolant_outlet_temp_c"] = float(coolant_outlet_temp_c)
-    settings = (
-        wear_enabled, round(float(wear_per_point_percent), 4), auto_correct,
-        auto_tool_change_enabled, tool_change_interval, round(float(tool_change_duration_seconds), 3),
-        round(float(coolant_flow_l_min), 2), round(float(coolant_inlet_temp_c), 2),
-        round(float(coolant_outlet_temp_c), 2),
-    )
-    if st.session_state.get("last_logged_wear_settings") != settings:
-        safe_application_log("welding_equipment_settings_changed", {
-            "wear_enabled": wear_enabled,
-            "wear_per_point_percent": settings[1],
-            "auto_correct_wear": auto_correct,
-            "auto_tool_change_enabled": auto_tool_change_enabled,
-            "tool_change_interval_bodies": tool_change_interval,
-            "tool_change_duration_seconds": settings[5],
-            "coolant_flow_l_min": settings[6],
-            "coolant_inlet_temp_c": settings[7],
-            "coolant_outlet_temp_c": settings[8],
-            "cooling_stress_factor": cooling["wear_stress_factor"],
-            "cooling_alerts": cooling["alerts"],
-            "quality_target_percent": 95.0,
-        })
-        st.session_state["last_logged_wear_settings"] = settings
-        if not production_active:
-            persist_equipment_state(state)
-
-    wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Aktuális eszközkopás", f'{float(wear_state.get("wear_percent", 0.0)):.2f}%')
-    m2.metric("Összes feldolgozott hegesztési pont", f'{int(wear_state.get("total_weld_points", 0)):,}'.replace(",", " "))
-    m3.metric("Sikeres önkorrekciók összesen", f'{int(wear_state.get("corrected_points", 0)):,}'.replace(",", " "))
-    m4.metric("Sikertelen önkorrekciók összesen", f'{int(wear_state.get("uncorrectable_points", 0)):,}'.replace(",", " "))
-
-    tool1, tool2, tool3 = st.columns(3)
-    tool1.metric("Aktuális eszköz", f'#{int(wear_state.get("current_tool_number", 1))}')
-    tool2.metric(
-        "Oldalfalciklusok az eszközzel",
-        f'{int(wear_state.get("bodies_since_tool_change", 0))} / {tool_change_interval}',
-    )
-    tool3.metric("Végrehajtott eszközcserék", int(wear_state.get("tool_change_count", 0)))
-    progress = min(1.0, int(wear_state.get("bodies_since_tool_change", 0)) / max(1, tool_change_interval))
-    st.progress(progress, text="Eszközélettartam: lezárt oldalfalciklusok az aktuális eszközzel")
-
-    if wear_state.get("tool_change_pending"):
-        if auto_tool_change_enabled and production_active:
-            st.info(
-                "Elérte az eszközcsere-intervallumot. A rendszer a jelenlegi oldalfal lezárása után "
-                "a következő ciklusok közötti szünetben cserél eszközt."
-            )
-        else:
-            st.warning(
-                "Eszközcsere szükséges. Az automatika nem indulhat tovább a csere végrehajtásáig. "
-                "Állítsd le a gyártást, majd használd a kézi eszközcsere gombot."
-            )
-    elif not auto_tool_change_enabled and int(wear_state.get("bodies_since_tool_change", 0)) >= tool_change_interval:
-        st.warning("Az eszköz elérte a beállított csereintervallumot, de az automatikus csere ki van kapcsolva.")
-
-    if st.button(
-        "Kézi eszközcsere / kopás nullázása",
-        key="reset_electrode_wear_v2",
-        disabled=production_active,
-        help="Új eszközt rögzít, a kopottságot és az eszközönkénti számlálókat nullázza, a teljes élettartam-számlálókat megőrzi.",
-    ):
-        change = replace_electrode_tool(
-            wear_state, reason="MANUAL",
-            body_id=str(state.get("last_sent_body_id") or wear_state.get("pending_tool_change_body_id") or ""),
-        )
-        log_tool_replacement(
-            state, change, tool_change_interval,
-            execution_window="operator_maintenance_while_stopped",
-        )
-        state["last_wear_summary"] = {}
-        st.toast("Eszközcsere naplózva; az új eszköz kopása 0%-ról indul.")
-        st.rerun()
-
-    if not wear_enabled:
-        st.caption("A kopásmodell ki van kapcsolva, de az élettartam-karosszérias számláló és az eszközcsere-napló működik.")
-    elif auto_correct:
-        st.caption(
-            "Az önkorrekció az áramerősséget 0,1 kA-os lépésekben, majd szükség esetén a hegesztési időt "
-            "5 ms-os lépésekben emeli, mindig a kiválasztott modell katalógushatárain belül. "
-            "A 95%-os mutató demonstrációs célérték, nem ipari elfogadási szabvány."
-        )
-    else:
-        st.caption("Önkorrekció nélkül a szintetikus minőségi cél alatti pontokat a monitor utómunkára küldi.")
-
 def start_automatic_production() -> None:
     """Start production only after explicit operator action and tool-life checks."""
     old_thread = st.session_state.get("auto_thread")
@@ -745,7 +484,9 @@ def start_automatic_production() -> None:
             "error": None,
         }
 
-    # Keep choices and life counters between cycles and across dashboard restarts.
+    # Operator-facing process parameters are intentionally locked to source-code defaults.
+    apply_factory_settings(state)
+    # Keep life counters between cycles and across dashboard restarts.
     state["fault_rate"] = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
     state["fault_mode"] = str(state.get("fault_mode", "within_limits"))
     state.setdefault("wear_enabled", True)
@@ -1148,6 +889,7 @@ if "auto_state" not in st.session_state:
         "error": None,
     }
     initial_state.update(persisted_equipment)
+    apply_factory_settings(initial_state)
     initial_state["wear_state"] = ensure_wear_state(initial_state.get("wear_state", {}))
     initial_state["running"] = False
     initial_state["tool_change_required"] = bool(
@@ -1156,6 +898,7 @@ if "auto_state" not in st.session_state:
     )
     st.session_state["auto_state"] = initial_state
     st.session_state["auto_stop_event"] = threading.Event()
+apply_factory_settings(st.session_state["auto_state"])
 st.session_state.setdefault("speed_percent_input", DEFAULT_SPEED_PERCENT)
 
 header_left, header_right = st.columns([5.4, 1.2], vertical_alignment="center")
@@ -1438,9 +1181,11 @@ def render_statistics_tab() -> None:
     actions = all_actions[all_actions["body_id"].astype(str).isin(session_ids)].copy() if not all_actions.empty else all_actions
     st.markdown("## Minőségügyi áttekintés")
     st.caption("A fő statisztika csak a mostani böngésző-munkamenetben indult oldalfalakat számolja; a korábbi futások az előzményekben maradnak.")
-    # This control panel must remain visible even before the first body exists.
-    render_fault_controls()
-    render_wear_controls()
+    st.info(
+        "A folyamatparaméterek gyári alapértéken, csak a forráskódból módosíthatóan futnak. "
+        "A kezelőfelületen kizárólag a szimuláció sebessége állítható. "
+        "A mesterséges hibaarány 0%; a kopás, önkorrekció, hűtés és automatikus eszközcsere fix beállításokat használ."
+    )
     with st.expander("Hegesztési recept – műszaki referencia-ellenőrzés", expanded=False):
         audit_rows = build_parameter_audit(CATALOG)
         audit_frame = pd.DataFrame(audit_rows)
