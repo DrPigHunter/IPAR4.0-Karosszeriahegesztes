@@ -81,7 +81,7 @@ def apply_electrode_wear(
         steps = 0
         actions: list[str] = []
 
-        if wear_enabled and auto_correct:
+        if wear_enabled and auto_correct and event.get("simulated_variation") != "OUTSIDE_ACCEPTED_LIMITS":
             while quality_before < QUALITY_TARGET_PERCENT and steps < MAX_CORRECTION_STEPS:
                 current = float(event["current_ka"])
                 weld_time = float(event["weld_time_ms"])
