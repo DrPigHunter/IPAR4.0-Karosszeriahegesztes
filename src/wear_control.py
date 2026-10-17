@@ -204,6 +204,11 @@ def cooling_condition(
         alerts.append(f"A hűtővíz belépő hőmérséklete magas ({inlet:.1f} °C; referencia max. 20 °C).")
     if outlet > COOLANT_OUTLET_TARGET_MAX_C:
         alerts.append(f"A hűtővíz kilépő hőmérséklete magas ({outlet:.1f} °C; referencia max. 30 °C).")
+    if outlet < inlet:
+        alerts.append(
+            f"A kilépő hűtővíz hidegebb a belépőnél ({outlet:.1f} °C < {inlet:.1f} °C); "
+            "ellenőrizd a mérőpontokat és a szenzorokat."
+        )
 
     low_flow_stress = max(0.0, (COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN - flow) / COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN)
     inlet_stress = max(0.0, inlet - COOLANT_INLET_TARGET_MAX_C) / 20.0
