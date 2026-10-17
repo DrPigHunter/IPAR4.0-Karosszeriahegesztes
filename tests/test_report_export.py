@@ -168,6 +168,7 @@ class ReportExportTests(unittest.TestCase):
         self.assertEqual(setting_values["Automatikus önkorrekció"], True)
         self.assertEqual(setting_values["Automatikus eszközcsere"], True)
         self.assertEqual(setting_values["Eszközcsere minden X oldalfalciklus után"], 2)
+        self.assertEqual(setting_values["Kopástól független alapfolyamat-hiba / pont (%)"], 0.01)
 
         tool_changes = pd.read_excel(BytesIO(data), sheet_name="Eszközcsere-napló")
         self.assertEqual(len(tool_changes), 1)
