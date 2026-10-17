@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.speed_control import CYCLE_TARGET_SECONDS
+
 
 def write_run_log(
     conn,
@@ -58,8 +60,10 @@ def write_run_log(
         "started_at": str(body["started_at"]) if body else "",
         "completed_at": str(body["completed_at"]) if body else "",
         "duration_seconds": round(duration_seconds, 3) if duration_seconds is not None else None,
-        "within_20_second_target": bool(duration_seconds is not None and duration_seconds < 20.0),
-        "target_cycle_seconds": 20,
+        "within_100_second_target": bool(
+            duration_seconds is not None and duration_seconds < CYCLE_TARGET_SECONDS
+        ),
+        "target_cycle_seconds": CYCLE_TARGET_SECONDS,
     }
 
     stamp = now.strftime("%Y%m%d_%H%M%S_%f")
@@ -85,7 +89,7 @@ def write_run_log(
         "pass_rate_percent": round(100.0 * passed / total, 2) if total else 0.0,
         "rework_rate_percent": round(100.0 * rework_count / total, 2) if total else 0.0,
         "average_cycle_seconds": round(sum(durations) / len(durations), 3) if durations else None,
-        "cycle_target_seconds": 20,
+        "cycle_target_seconds": CYCLE_TARGET_SECONDS,
         "note": "Historical summary includes earlier runs from the SQLite database; compare individual JSON logs for current-cycle results.",
     }
     summary_path = target / "production_summary.json"
