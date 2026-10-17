@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import importlib
 import json
 import os
 import random
@@ -26,7 +27,7 @@ from src.monitor import (
     BROKER_HOST, BROKER_PORT, DB_PATH, REWORK_DONE,
     REWORK_IN_PROGRESS, REWORK_WAITING, TOPIC,
 )
-from src.simulator import generate_body_events, publish_events
+from src import simulator as simulator_module
 
 BETWEEN_BODIES_PAUSE_SECONDS = 10.0
 PUBLISH_DELAY_MS = 90  # milliseconds per weld result; 142 points take about 13 seconds
@@ -148,7 +149,10 @@ def automatic_production_worker(
         config_id = random.choice(options)
         previous_config = config_id
         try:
-            body_id, events = generate_body_events(
+            # Streamlit reruns the dashboard but may keep imported modules cached.
+            # Reload the simulator module so changes pulled from Git are picked up here too.
+            importlib.reload(simulator_module)
+            body_id, events = simulator_module.generate_body_events(
                 config_id,
                 fault_rate=float(state.get("fault_rate", DEFAULT_FAULT_RATE)),
                 fault_mode=str(state.get("fault_mode", "within_limits")),
@@ -157,11 +161,18 @@ def automatic_production_worker(
             state["config_id"] = config_id
             state["last_started_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
             state["error"] = None
-            publish_events(events, delay_ms=PUBLISH_DELAY_MS)
+            simulator_module.publish_events(events, delay_ms=PUBLISH_DELAY_MS)
             state["completed_cycles"] = int(state.get("completed_cycles", 0)) + 1
             state["last_sent_body_id"] = body_id
         except Exception as exc:
-            state["error"] = str(exc)
+            detail = str(exc)
+            if "unexpected keyword argument 'fault_mode'" in detail:
+                detail = (
+                    "A szimulátor régi Python-modulja van betöltve. A rendszer megpróbálja "
+                    "újratölteni a src/simulator.py fájlt a következő ciklus előtt. "
+                    f"Részlet: {detail}"
+                )
+            state["error"] = detail
         # A full cycle must finish before the separate 10-second inter-body pause begins.
         stop_event.wait(BETWEEN_BODIES_PAUSE_SECONDS)
     state["running"] = False
