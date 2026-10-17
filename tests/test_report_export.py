@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 
 from src.catalog import list_configurations
 from src.monitor import connect_db, process_event
-from src.report_export import append_application_log, export_production_report
+from src.report_export import append_application_log, export_production_report, split_long_sheets
 from src.simulator import generate_body_events
 
 
@@ -33,6 +33,28 @@ class ReportExportTests(unittest.TestCase):
         for event in events:
             process_event(self.conn, event, log_dir=self.log_dir)
         return config
+
+    def test_large_tables_are_split_without_losing_rows(self):
+        source = pd.DataFrame({"row_id": list(range(7)), "payload": [f"row-{i}" for i in range(7)]})
+        sheets = split_long_sheets({"Hegesztési adatok": source}, max_data_rows=3)
+
+        self.assertEqual(list(sheets), [
+            "Hegesztési adatok 1", "Hegesztési adatok 2", "Hegesztési adatok 3"
+        ])
+        self.assertEqual([len(frame) for frame in sheets.values()], [3, 3, 1])
+        self.assertTrue(all(len(name) <= 31 for name in sheets))
+        combined = pd.concat(sheets.values(), ignore_index=True)
+        pd.testing.assert_frame_equal(combined, source)
+
+    def test_short_tables_keep_original_sheet_name(self):
+        source = pd.DataFrame({"row_id": [1, 2]})
+        sheets = split_long_sheets({"Karosszériák": source}, max_data_rows=3)
+        self.assertEqual(list(sheets), ["Karosszériák"])
+        pd.testing.assert_frame_equal(sheets["Karosszériák"], source)
+
+    def test_sheet_split_rejects_non_positive_row_limit(self):
+        with self.assertRaises(ValueError):
+            split_long_sheets({"rows": pd.DataFrame({"x": [1]})}, max_data_rows=0)
 
     def test_export_contains_evaluation_metrics_all_tables_and_logs(self):
         config = self._record_one_cycle()
