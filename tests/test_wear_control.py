@@ -9,8 +9,10 @@ from src.monitor import connect_db, process_event
 from src.simulator import generate_body_events
 from src.wear_control import (
     DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    DEFAULT_WEAR_PER_POINT_PERCENT,
     QUALITY_TARGET_PERCENT,
     apply_electrode_wear,
+    cooling_condition,
     ensure_wear_state,
     register_completed_body_for_tool,
     replace_electrode_tool,
@@ -137,11 +139,22 @@ class ElectrodeWearTests(unittest.TestCase):
             self.assertIsNone(change)
             self.assertEqual(state["current_tool_number"], 1)
 
-        change = register_completed_body_for_tool(
+        scheduled = register_completed_body_for_tool(
             state, interval_bodies=3, enabled=True, body_id="BODY-3"
         )
+        self.assertIsNotNone(scheduled)
+        self.assertEqual(scheduled["change_mode"], "PENDING_AUTO")
+        self.assertTrue(state["tool_change_pending"])
+        # Wear is not reset at cycle end; the actual replacement is executed in the break.
+        self.assertAlmostEqual(state["wear_percent"], 37.5)
+        self.assertEqual(state["current_tool_number"], 1)
+        self.assertEqual(state["bodies_since_tool_change"], 3)
+
+        change = replace_tool_if_due(
+            state, interval_bodies=3, enabled=True, body_id="BODY-3", reason="AUTO_DURING_BREAK"
+        )
         self.assertIsNotNone(change)
-        self.assertEqual(change["change_mode"], "AUTO")
+        self.assertEqual(change["change_mode"], "AUTO_DURING_BREAK")
         self.assertEqual(change["previous_tool_number"], 1)
         self.assertEqual(change["new_tool_number"], 2)
         self.assertEqual(change["tool_change_number"], 1)
@@ -153,6 +166,7 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertEqual(state["bodies_since_tool_change"], 0)
         self.assertEqual(state["tool_weld_points"], 0)
         self.assertEqual(state["tool_corrected_points"], 0)
+        self.assertFalse(state["tool_change_pending"])
         # Lifetime metrics remain available; only counters for the replaced tool reset.
         self.assertEqual(state["total_weld_points"], 300)
 
@@ -162,15 +176,21 @@ class ElectrodeWearTests(unittest.TestCase):
             change = register_completed_body_for_tool(
                 state, interval_bodies=3, enabled=False, body_id=f"BODY-{body_number}"
             )
-            self.assertIsNone(change)
+            if body_number < 3:
+                self.assertIsNone(change)
+            else:
+                self.assertIsNotNone(change)
+                self.assertEqual(change["change_mode"], "PENDING_MANUAL")
         self.assertEqual(state["bodies_since_tool_change"], 3)
+        self.assertTrue(state["tool_change_pending"])
         self.assertEqual(state["current_tool_number"], 1)
 
+        # Once automatic replacement is re-enabled, it is executed in the next downtime window.
         change = replace_tool_if_due(
             state, interval_bodies=3, enabled=True, body_id="BODY-3"
         )
         self.assertIsNotNone(change)
-        self.assertEqual(change["change_mode"], "AUTO")
+        self.assertEqual(change["change_mode"], "AUTO_DURING_BREAK")
         self.assertEqual(state["wear_percent"], 0.0)
         self.assertEqual(state["current_tool_number"], 2)
         self.assertEqual(state["bodies_since_tool_change"], 0)
@@ -202,6 +222,31 @@ class ElectrodeWearTests(unittest.TestCase):
             register_completed_body_for_tool(state, interval_bodies=0)
         with self.assertRaises(ValueError):
             replace_tool_if_due(state, interval_bodies=10_001)
+
+    def test_reference_cooling_values_are_ok_and_poor_cooling_increases_wear_stress(self):
+        normal = cooling_condition(6.0, 20.0, 30.0)
+        self.assertEqual(normal["alerts"], [])
+        self.assertEqual(normal["wear_stress_factor"], 1.0)
+
+        poor = cooling_condition(3.0, 25.0, 35.0)
+        self.assertEqual(len(poor["alerts"]), 3)
+        self.assertGreater(poor["wear_stress_factor"], 1.0)
+
+        _, events = generate_body_events(
+            CONFIG["config_id"], seed=321, wear_state={},
+            wear_enabled=True, auto_correct_wear=False,
+            wear_per_point_percent=DEFAULT_WEAR_PER_POINT_PERCENT,
+            coolant_flow_l_min=3.0, coolant_inlet_temp_c=25.0, coolant_outlet_temp_c=35.0,
+        )
+        points = [e for e in events if e.get("event_type") == "weld_result"]
+        self.assertTrue(all(e["cooling_alerts"] for e in points))
+        self.assertTrue(all(e["cooling_stress_factor"] > 1.0 for e in points))
+
+    def test_invalid_cooling_values_are_rejected(self):
+        with self.assertRaises(ValueError):
+            cooling_condition(-1.0, 20.0, 30.0)
+        with self.assertRaises(ValueError):
+            cooling_condition(6.0, 90.0, 30.0)
 
     def test_wear_rate_validation(self):
         state = {}
