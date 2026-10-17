@@ -26,9 +26,9 @@ from src.monitor import (
 )
 from src.simulator import generate_body_events, publish_events
 
-AUTO_INTERVAL_SECONDS = 5.0
-PUBLISH_DELAY_MS = 6
-DEFAULT_FAULT_RATE = 0.0001
+BETWEEN_BODIES_PAUSE_SECONDS = 10.0
+PUBLISH_DELAY_MS = 90  # milliseconds per weld result; 142 points take about 13 seconds
+DEFAULT_FAULT_RATE = 0.0
 
 st.set_page_config(
     page_title="BODYLINE | Ipar 4.0",
@@ -159,8 +159,8 @@ def automatic_production_worker(
             state["last_sent_body_id"] = body_id
         except Exception as exc:
             state["error"] = str(exc)
-        wait_seconds = max(0.0, AUTO_INTERVAL_SECONDS - (time.monotonic() - cycle_started))
-        stop_event.wait(wait_seconds)
+        # A full cycle must finish before the separate 10-second inter-body pause begins.
+        stop_event.wait(BETWEEN_BODIES_PAUSE_SECONDS)
     state["running"] = False
 
 
@@ -240,6 +240,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if "app_session_started_at" not in st.session_state:
+    st.session_state["app_session_started_at"] = time.time()
 if "auto_state" not in st.session_state:
     start_automatic_production()
 
@@ -256,7 +258,7 @@ def render_production_tab() -> None:
     head_left, head_right = st.columns([5, 1.3], vertical_alignment="center")
     with head_left:
         st.markdown("## Gyártócella élő nézete")
-        st.caption(f"Új karosszéria automatikus indítása · {AUTO_INTERVAL_SECONDS:.0f} mp-es ciklus · véletlenszerű modellválasztás")
+        st.caption(f"Karosszéria-hegesztés 20 mp alatt · két karosszéria között {BETWEEN_BODIES_PAUSE_SECONDS:.0f} mp szünet · automatikus modellválasztás")
     with head_right:
         if running:
             if st.button("Ⅱ  Automatika leállítása", key="stop_auto", use_container_width=True):
@@ -407,7 +409,7 @@ def render_statistics_tab() -> None:
             "Mesterséges hibák valószínűsége",
             min_value=0.0, max_value=0.01, value=float(st.session_state["auto_state"].get("fault_rate", DEFAULT_FAULT_RATE)),
             step=0.0001, format="%.4f", key="fault_rate_control",
-            help="Csak a következő karosszériákra érvényes. Alapérték: 0,0001; a gyári technológiai értékek szimuláltak.",
+            help="Alapérték 0,0000: nincs mesterséges hibainjektálás. Csak a következő karosszériákra érvényes tesztbeállítás.",
         )
         st.session_state["auto_state"]["fault_rate"] = fault_rate
 
