@@ -236,6 +236,60 @@ def _make_summary(
     return summary, by_model, info
 
 
+def _make_wear_summary_frame(events: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate electrode-wear and correction details persisted in raw MQTT events."""
+    columns = [
+        "Modellazonosító", "Hegesztési pontok", "Sikeres önkorrekciók",
+        "Korrekciós lépések", "Sikertelen korrekciók",
+        "Legnagyobb kopás (%)", "Átlagos minőségi mutató (%)",
+    ]
+    if events.empty or "raw_json" not in events.columns:
+        return pd.DataFrame([{"Megjegyzés": "Még nincs rögzített elektródakopási adat."}])
+
+    grouped: dict[str, dict[str, Any]] = {}
+    all_values: list[dict[str, Any]] = []
+    for raw in events["raw_json"].tolist():
+        try:
+            payload = json.loads(str(raw))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if payload.get("event_type") != "weld_result" or payload.get("electrode_wear_enabled") is not True:
+            continue
+        model = str(payload.get("config_id") or "Ismeretlen")
+        for key in (model, "ÖSSZESEN"):
+            bucket = grouped.setdefault(key, {
+                "points": 0, "corrected": 0, "steps": 0, "failed": 0,
+                "max_wear": 0.0, "quality_sum": 0.0, "quality_count": 0,
+            })
+            bucket["points"] += 1
+            bucket["corrected"] += int(bool(payload.get("auto_correction_applied")))
+            bucket["steps"] += int(payload.get("auto_correction_steps", 0) or 0)
+            bucket["failed"] += int(payload.get("process_quality_ok") is False)
+            bucket["max_wear"] = max(bucket["max_wear"], float(payload.get("electrode_wear_percent", 0.0) or 0.0))
+            quality = payload.get("simulated_quality_index_percent")
+            if isinstance(quality, (int, float)):
+                bucket["quality_sum"] += float(quality)
+                bucket["quality_count"] += 1
+
+    rows = []
+    for model, values in grouped.items():
+        rows.append({
+            "Modellazonosító": model,
+            "Hegesztési pontok": values["points"],
+            "Sikeres önkorrekciók": values["corrected"],
+            "Korrekciós lépések": values["steps"],
+            "Sikertelen korrekciók": values["failed"],
+            "Legnagyobb kopás (%)": round(values["max_wear"], 3),
+            "Átlagos minőségi mutató (%)": (
+                round(values["quality_sum"] / values["quality_count"], 2)
+                if values["quality_count"] else None
+            ),
+        })
+    return pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(
+        [{"Megjegyzés": "A naplózott események között nincs bekapcsolt kopásmodellből származó adat."}
+    ])
+
+
 def _excel_safe(frame: pd.DataFrame) -> pd.DataFrame:
     """Convert structured Python values to text before passing them to openpyxl."""
     result = frame.copy()
@@ -280,6 +334,9 @@ def export_production_report(
     log_dir: str | Path = DEFAULT_LOG_DIR,
     export_timestamp: datetime | None = None,
     speed_percent: float = 100.0,
+    wear_enabled: bool = True,
+    wear_per_point_percent: float = 0.03,
+    auto_correct_wear: bool = True,
 ) -> tuple[Path, bytes, dict[str, Any]]:
     """Write a dated Excel report to disk and return its bytes for browser download."""
     now = export_timestamp or datetime.now().astimezone()
@@ -304,6 +361,10 @@ def export_production_report(
         {"Beállítás": "Pont-eltérés valószínűsége (%)", "Érték": float(fault_rate_percent)},
         {"Beállítás": "Eltérés módja", "Érték": fault_mode},
         {"Beállítás": "Szimulációs sebesség (%)", "Érték": float(speed_percent)},
+        {"Beállítás": "Elektródakopás modellezése", "Érték": bool(wear_enabled)},
+        {"Beállítás": "Kopás hegesztési pontonként (%)", "Érték": float(wear_per_point_percent)},
+        {"Beállítás": "Automatikus önkorrekció", "Érték": bool(auto_correct_wear)},
+        {"Beállítás": "Minőségi célérték (%)", "Érték": 95.0},
         {"Beállítás": "Automatika leállt az exportig", "Érték": bool(automatic_worker_stopped)},
         {"Beállítás": "Megjegyzés", "Érték": "A részletes lapok minden elérhető adatbázisrekordot tartalmaznak, nem csak a képernyőn látható legutóbbi sorokat."},
     ])
@@ -312,6 +373,7 @@ def export_production_report(
         "Modellenként": by_model,
         "Karosszériák": tables["bodies"],
         "Hegesztési adatok": tables["weld_events"],
+        "Kopás és önkorrekció": _make_wear_summary_frame(tables["weld_events"]),
         "Utómunka sor": tables["rework_queue"],
         "Utómunka műveletek": tables["rework_actions"],
         "Rendszerhibák": tables["system_errors"],
