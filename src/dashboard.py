@@ -190,21 +190,43 @@ def session_bodies_only(bodies: pd.DataFrame) -> pd.DataFrame:
 
 
 def start_automatic_production() -> None:
-    """Start the cycle worker once per Streamlit session."""
+    """Start production only after the operator presses the start button."""
     old_thread = st.session_state.get("auto_thread")
     old_stop = st.session_state.get("auto_stop_event")
-    if old_thread is not None and old_thread.is_alive() and old_stop is not None and not old_stop.is_set():
-        return
-    if old_thread is not None and old_thread.is_alive() and old_stop is not None:
-        old_thread.join(timeout=1.0)
+    if old_thread is not None and old_thread.is_alive():
+        if old_stop is None or not old_stop.is_set():
+            return
+        # A stop request cannot interrupt a sidewall that is already being published.
+        # Wait for that cycle to finish so a second worker cannot duplicate production.
+        old_thread.join(timeout=30.0)
+        if old_thread.is_alive():
+            state = st.session_state.get("auto_state", {})
+            state["error"] = "A korábbi gyártási ciklus még fut; várd meg a befejezését, majd indítsd újra."
+            return
+
+    state = st.session_state.get("auto_state")
+    if state is None:
+        state = {
+            "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
+            "fault_mode": "within_limits",
+            "session_started_at": st.session_state.get("app_session_started_at", time.time()),
+            "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
+            "error": None,
+        }
+    # Preserve the operator's choices made on the statistics tab; starting must not
+    # reset the probability or selected variation mode back to the defaults.
+    state["running"] = True
+    state["fault_rate"] = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
+    state["fault_mode"] = str(state.get("fault_mode", "within_limits"))
+    state.setdefault("completed_cycles", 0)
+    state.setdefault("session_started_at", st.session_state.get("app_session_started_at", time.time()))
+    state.setdefault("body_id", "")
+    state.setdefault("config_id", "")
+    state.setdefault("last_started_at", "")
+    state.setdefault("last_sent_body_id", "")
+    state["error"] = None
+
     stop_event = threading.Event()
-    state = {
-        "running": True, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
-        "fault_mode": "within_limits",
-        "session_started_at": st.session_state.get("app_session_started_at", time.time()),
-        "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
-        "error": None,
-    }
     worker = threading.Thread(
         target=automatic_production_worker, args=(stop_event, state, list(CONFIG_BY_ID)),
         name="automatic-welding-production", daemon=True,
@@ -280,7 +302,16 @@ if st.session_state.get("app_process_id") != os.getpid():
     st.session_state.pop("auto_thread", None)
     st.session_state.pop("auto_stop_event", None)
 if "auto_state" not in st.session_state:
-    start_automatic_production()
+    # Start in a genuinely idle state: the operator sets fault controls first,
+    # then explicitly starts the automatic production from the live tab.
+    st.session_state["auto_state"] = {
+        "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
+        "fault_mode": "within_limits",
+        "session_started_at": st.session_state.get("app_session_started_at", time.time()),
+        "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
+        "error": None,
+    }
+    st.session_state["auto_stop_event"] = threading.Event()
 
 production_tab, statistics_tab = st.tabs(["◉  Élő gyártás", "▦  Statisztika és utómunka"])
 
@@ -430,11 +461,14 @@ def render_statistics_tab() -> None:
     open_rework = int((rework["status"] != REWORK_DONE).sum()) if not rework.empty else 0
     avg_points = float(completed["expected_count"].mean()) if not completed.empty and "expected_count" in completed else 0.0
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Összes oldalfal", len(bodies))
-    m2.metric("Megfelelési arány", f"{pass_pct:.1f}%")
-    m3.metric("Selejtarány", f"{100 * failed / len(completed):.1f}%" if len(completed) else "0.0%")
-    m4.metric("Átlagos elvárt pontszám", f"{avg_points:.1f}")
+    scrap_pct = 100 * failed / len(completed) if len(completed) else 0.0
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Összes oldalfal", f"{len(bodies):,}".replace(",", " "))
+    m2.metric("Megfelelt oldalfalak", f"{good:,}".replace(",", " "))
+    m3.metric("Selejtes oldalfalak (db)", f"{failed:,}".replace(",", " "))
+    m4.metric("Megfelelési arány", f"{pass_pct:.1f}%")
+    m5.metric("Selejtarány", f"{scrap_pct:.1f}%")
+    st.caption(f"Átlagos elvárt hegesztési pontszám: {avg_points:.1f} pont/oldalfal.")
 
     chart_left, chart_right = st.columns([1.2, 1])
     with chart_left:
@@ -482,12 +516,16 @@ def render_statistics_tab() -> None:
                 "A második mód egy kis lépéssel a határon kívülre állít egy paramétert."
             ),
         )
-        st.session_state["auto_state"]["fault_rate"] = float(fault_rate_percent) / 100.0
-        st.session_state["auto_state"]["fault_mode"] = (
+        # Store settings independently from worker lifecycle so the operator can
+        # configure them while production is stopped and start with these exact values.
+        st.session_state["selected_fault_rate"] = float(fault_rate_percent) / 100.0
+        st.session_state["selected_fault_mode"] = (
             "outside_limits"
             if fault_mode_label.startswith("Átlépi")
             else "within_limits"
         )
+        st.session_state["auto_state"]["fault_rate"] = st.session_state["selected_fault_rate"]
+        st.session_state["auto_state"]["fault_mode"] = st.session_state["selected_fault_mode"]
         st.caption(
             f"Pontonkénti esély: {fault_rate_percent:.3f}% · "
             f"{'a kiválasztott pont továbbra is megfelelő' if st.session_state['auto_state']['fault_mode'] == 'within_limits' else 'az eltérés határon kívülre kerül'}."
