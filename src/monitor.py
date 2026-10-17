@@ -20,13 +20,16 @@ def connect_db() -> sqlite3.Connection:
     conn.executescript('''CREATE TABLE IF NOT EXISTS bodies (
       body_id TEXT PRIMARY KEY, body_type TEXT NOT NULL, expected_count INTEGER NOT NULL,
       expected_ids_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'FOLYAMATBAN',
-      missing_ids_json TEXT NOT NULL DEFAULT '[]', duplicate_ids_json TEXT NOT NULL DEFAULT '[]',
+      missing_ids_json TEXT NOT NULL DEFAULT '[]', unexpected_ids_json TEXT NOT NULL DEFAULT '[]', duplicate_ids_json TEXT NOT NULL DEFAULT '[]',
       parameter_errors INTEGER NOT NULL DEFAULT 0, event_count INTEGER NOT NULL DEFAULT 0,
       started_at TEXT NOT NULL, completed_at TEXT, latency_ms REAL);
       CREATE TABLE IF NOT EXISTS weld_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT, body_id TEXT NOT NULL, weld_id TEXT NOT NULL,
       current_ka REAL, weld_time_ms REAL, electrode_force_kn REAL, timestamp TEXT NOT NULL,
       received_at REAL NOT NULL, errors_json TEXT NOT NULL, duplicate INTEGER NOT NULL DEFAULT 0, raw_json TEXT NOT NULL);''')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(bodies)').fetchall()}
+    if 'unexpected_ids_json' not in columns:
+        conn.execute("ALTER TABLE bodies ADD COLUMN unexpected_ids_json TEXT NOT NULL DEFAULT '[]'")
     conn.commit(); return conn
 
 def process_event(conn: sqlite3.Connection, event: dict[str, Any], received_at: float | None = None) -> None:
@@ -56,7 +59,7 @@ def process_event(conn: sqlite3.Connection, event: dict[str, Any], received_at: 
             latency_ms = max(0.0, (received_at - sent_epoch) * 1000.0)
         except (ValueError, OverflowError):
             latency_ms = None
-        conn.execute("UPDATE bodies SET status=?,missing_ids_json=?,duplicate_ids_json=?,parameter_errors=?,completed_at=?,latency_ms=? WHERE body_id=?", (result["status"], json.dumps(result["missing_ids"]), json.dumps(result["duplicate_ids"]), parameter_errors, sent_at, latency_ms, body_id))
+        conn.execute("UPDATE bodies SET status=?,missing_ids_json=?,unexpected_ids_json=?,duplicate_ids_json=?,parameter_errors=?,completed_at=?,latency_ms=? WHERE body_id=?", (result["status"], json.dumps(result["missing_ids"]), json.dumps(result["unexpected_ids"]), json.dumps(result["duplicate_ids"]), parameter_errors, sent_at, latency_ms, body_id))
         conn.commit()
 
 def main() -> None:
