@@ -16,7 +16,7 @@ A rendszer tíz járműmodell bal oldalfalának szoftveres ponthegesztési folya
 - **Fizikai folyamat modellje:** egy adott járműmodell bal oldalfalának hegesztési pontjai.
 - **Logikai komponensek:** Excel-katalógus betöltő, szimulátor/publisher, MQTT-broker, monitor/ellenőrző, SQLite-adattár és Streamlit dashboard.
 - **Transzducer/szenzor szerepének szimulációja:** a szimulátor a kiválasztott Excel-konfiguráció névleges értékei körül áramerősséget, hegesztési időt és elektródaerőt generál.
-- **Emberi szerep:** az operátor kiválasztja a járműmodellt, figyeli a hegesztést, ellenőrzi a hibajelzéseket és követi az utómunka állapotát.
+- **Emberi szerep:** az operátor a gyártás kézi indítása előtt beállítja a pontonkénti hibaarányt és hibamódot, a sebességet 100–10 000% között állíthatja, figyeli a hegesztést, ellenőrzi a hibajelzéseket, kezeli az utómunkát, és kijelentkezéskor Excel-jelentést készíthet. A tíz modell közül a rendszer automatikusan választ.
 
 ## Architektúra és adatfolyam
 
@@ -25,13 +25,14 @@ flowchart TD
     XLSX[GitHubon verziózott welding_catalog.xlsx] --> CAT[Konfiguráció betöltése]
     CAT --> SIM[Oldalfal-szimulátor]
     OP[Operátor] --> UI[Streamlit élő dashboard]
-    UI --> SIM
+    UI -->|indítás, hibabeállítás, sebesség| SIM
     SIM -->|welding/events JSON, QoS 1| MQTT[Mosquitto broker]
     MQTT --> MON[Monitor és ellenőrző]
     CAT --> MON
     MON --> RULES[Modellhez tartozó pontteljesség, duplikáció és paraméterek ellenőrzése]
     RULES --> DB[(SQLite futásnapló)]
     DB --> UI
+    UI -->|Excel-jelentés és teljes napló| EXPORT[Dátumozott XLSX + logfájlok]
     UI -->|Utómunka START / COMPLETE| MQTT
     MON --> RW[Selejt → utómunka-sor]
     RW --> DB
@@ -56,6 +57,14 @@ A GitHubon tárolt, két munkalapos Excel-munkafüzet tíz modell–alkatrész k
 6. Utómunka állapotmenet: `UTÓMUNKÁRA VÁR` → `UTÓMUNKA FOLYAMATBAN` → `UTÓMUNKA ELVÉGEZVE – ÚJRAELLENŐRZÉS SZÜKSÉGES`. Ez az utolsó állapot sem minősíti automatikusan megfelelőre a korábbi selejtes darabot.
 7. A dashboard 2 másodpercenként frissül.
 
+## Üzemeltetési vezérlés és jelentés
+
+- A dashboard induláskor **nem indít automatikusan gyártást**. Az operátor beállíthatja a hibaarányt, a hibamódot és a 100–10 000%-os sebességet, majd külön gombbal indíthat.
+- A 100%-os sebesség a 90 ms-os pontküldési alapvárakozást és a 10 másodperces ciklusok közötti szünetet jelenti. A nagyobb sebesség ezeket a várakozásokat csökkenti; nem ígér ugyanekkora tényleges gyorsulást.
+- A publisher a QoS 1 üzeneteket sorrendben sorba állítja, miközben a hálózati hurok kezeli a visszaigazolásokat. A ciklus vége előtt a visszaigazolásokat ellenőrzi, összesített időkorláttal.
+- A jobb felső kijelentkezés először dátumozott Excel-pillanatképet ment, és nem vár arra, hogy a gyártási szál magától leálljon. Ha a szál befejeződik, a munkafüzet a legfrissebb mentett adatokkal frissül.
+- Az SQLite adatbázis, a ciklusonkénti JSON, a napi JSONL és az alkalmazás/konzolnaplók külön rétegek. A napló- és Excel-export nem helyettesíti a folyamatos SQLite-mentést.
+
 ## Tesztterv
 
 | Azonosító | Bemenet | Elvárt eredmény |
@@ -68,6 +77,10 @@ A GitHubon tárolt, két munkalapos Excel-munkafüzet tíz modell–alkatrész k
 | T06 | Nem katalógusban szereplő pont érkezik | Váratlan pont; selejt |
 | T07 | Ismeretlen konfiguráció vagy esemény | Feldolgozási hiba naplózva |
 | T08 | Utómunka START, majd COMPLETE | Állapotátmenet és műveleti napló |
+| T09 | Sebesség 100% és 10 000% | Alapidők megőrzése és megfelelő skálázás |
+| T10 | MQTT-küldés sebességtesztje | Az események sorrendben sorba állnak, QoS 1 visszaigazolások ellenőrzöttek |
+| T11 | Excel-jelentés létrehozása | Összes adatlap megvan, az üres adatbázis is kezelhető |
+| T12 | Két jelentés ugyanabban a másodpercben | A fájlnevek nem írják felül egymást |
 
 Futtatás:
 
