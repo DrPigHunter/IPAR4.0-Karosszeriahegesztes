@@ -7,3 +7,6 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 .streamlit/secrets.toml
+
+# Generated runtime statistics and per-cycle JSON logs
+logs/
