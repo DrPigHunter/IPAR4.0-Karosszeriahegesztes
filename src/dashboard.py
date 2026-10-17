@@ -1,11 +1,12 @@
-"""Live Streamlit dashboard: Excel-backed side-wall recipes, weld checks, and rework queue."""
+"""Modern, compact two-tab Streamlit dashboard for automatic sidewall welding simulation."""
 from __future__ import annotations
 
+import html
 import json
+import random
 import sqlite3
-import sys
-import time
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ import paho.mqtt.client as mqtt
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -24,36 +26,79 @@ from src.monitor import (
 )
 from src.simulator import generate_body_events, publish_events
 
+AUTO_INTERVAL_SECONDS = 5.0
+PUBLISH_DELAY_MS = 6
+DEFAULT_FAULT_RATE = 0.0001
 
-def publisher_worker(events: list[dict[str, Any]], delay_ms: int, state: dict[str, Any]) -> None:
-    """Publish asynchronously so the live UI keeps updating during welding."""
-    try:
-        publish_events(events, delay_ms=delay_ms)
-        state["completed"] = True
-    except Exception as exc:
-        state["error"] = str(exc)
-    finally:
-        state["running"] = False
+st.set_page_config(
+    page_title="BODYLINE | Ipar 4.0",
+    page_icon="🏭",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-st.set_page_config(page_title="Oldalfal-hegesztés | Ipar 4.0", page_icon="🏭", layout="wide")
-st.title("Autóipari oldalfal-ponthegesztés felügyelete")
-st.caption("Élő szimulált gyártócella · Excel-alapú modellkonfigurációk · MQTT-adatút · automatikus utómunka")
+st.markdown(
+    """
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+      :root { --ink:#15253c; --muted:#6c7a90; --line:#e3eaf2; --panel:#ffffff; --blue:#2457d6; --teal:#13a887; }
+      html, body, [class*="css"] { font-family:'DM Sans',sans-serif; }
+      .stApp { background:linear-gradient(145deg,#f5f8fc 0%,#eef3f9 100%); color:var(--ink); }
+      [data-testid="stAppViewContainer"] .main .block-container { max-width:1560px; padding:1rem 1.5rem 1rem; }
+      header[data-testid="stHeader"] { background:transparent; height:2rem; }
+      [data-testid="stToolbar"], #MainMenu, footer { visibility:hidden; }
+      h1,h2,h3 { font-family:'Space Grotesk',sans-serif !important; color:var(--ink); letter-spacing:-.03em; }
+      h1 { font-size:1.85rem !important; margin:0 0 .15rem 0 !important; }
+      h2 { font-size:1.15rem !important; margin:.2rem 0 .45rem !important; }
+      h3 { font-size:1rem !important; }
+      p, label, .stCaption { color:var(--muted); }
+      div[data-testid="stTabs"] button { font-weight:700; font-size:.94rem; padding:.7rem 1.1rem; }
+      div[data-testid="stTabs"] button[aria-selected="true"] { color:var(--blue); }
+      div[data-testid="stMetric"] { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:.7rem .9rem; box-shadow:0 4px 16px #233c5b08; }
+      div[data-testid="stMetricLabel"] { font-size:.75rem; }
+      div[data-testid="stMetricValue"] { font-family:'Space Grotesk',sans-serif; font-size:1.48rem; }
+      div[data-testid="stProgress"] > div { border-radius:999px; height:.6rem; }
+      .hero { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1.05rem 1.2rem; margin:.15rem 0 .8rem; background:#fff; border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 24px #233c5b0a; }
+      .hero-title { color:var(--ink); font:700 1.2rem 'Space Grotesk',sans-serif; letter-spacing:-.025em; }
+      .hero-sub { color:var(--muted); font-size:.82rem; margin-top:.25rem; }
+      .pill { white-space:nowrap; display:inline-flex; align-items:center; gap:.45rem; border-radius:999px; padding:.4rem .75rem; font-size:.76rem; font-weight:700; }
+      .pill-live { color:#08785f; background:#e3f8f1; }
+      .pill-off { color:#66758b; background:#edf1f6; }
+      .dot { width:7px; height:7px; border-radius:50%; display:inline-block; background:currentColor; }
+      .section-label { margin:.5rem 0 .45rem; color:#61718a; font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.09em; }
+      .reading { display:flex; justify-content:space-between; gap:.7rem; align-items:center; border:1px solid var(--line); background:#fff; border-radius:12px; padding:.62rem .8rem; min-height:58px; }
+      .reading-label { font-size:.7rem; color:var(--muted); }
+      .reading-value { margin-top:.15rem; font:700 1.05rem 'Space Grotesk',sans-serif; color:var(--ink); }
+      .spot-grid { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:4px; padding:.6rem; border:1px solid var(--line); border-radius:14px; background:#fff; }
+      .spot { display:flex; align-items:center; justify-content:center; height:22px; min-width:0; border-radius:5px; font-size:.65rem; font-weight:700; letter-spacing:-.02em; }
+      .spot-ok { color:#08785f; background:#dff7ed; }
+      .spot-wait { color:#7a899e; background:#edf1f6; }
+      .spot-bad { color:#b42336; background:#ffe5e8; }
+      .spot-warn { color:#8a5a00; background:#fff1ce; }
+      .legend { display:flex; flex-wrap:wrap; gap:.9rem; margin:.35rem 0 .65rem; color:var(--muted); font-size:.72rem; }
+      .legend span { display:flex; align-items:center; gap:.35rem; }
+      .legend i { width:8px; height:8px; border-radius:3px; display:inline-block; }
+      .compact-note { color:var(--muted); font-size:.74rem; }
+      div[data-testid="stDataFrame"] { border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+      div.stButton > button { border-radius:10px; font-weight:700; }
+      div.stButton > button[kind="primary"] { background:var(--blue); border-color:var(--blue); }
+      @media(max-width:900px) { .spot-grid { grid-template-columns:repeat(10,minmax(0,1fr)); } .hero { align-items:flex-start; flex-direction:column; } }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 try:
     CATALOG = list_configurations()
 except CatalogError as exc:
-    st.error(f"Nem tölthető be a GitHub-repó Excel-katalógusa: {exc}")
+    st.error(f"Nem olvasható az Excel-katalógus: {exc}")
     st.stop()
 
-CONFIG_BY_ID = {config["config_id"]: config for config in CATALOG}
-st.warning(
-    "Oktatási szimuláció: az Excel-katalógus pontjai és paraméterhatárai szintetikus példák, "
-    "nem valódi Audi/CUPRA/VW/Škoda gyártási specifikációk. A mért paraméterek nem igazolják a fizikai kötés szilárdságát."
-)
+CONFIG_BY_ID = {cfg["config_id"]: cfg for cfg in CATALOG}
 
 
 def publish_control_event(event: dict[str, Any]) -> None:
-    """Send operator actions via MQTT so the monitor owns the state transitions."""
+    """Send operator actions through MQTT so the monitor controls state transitions."""
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"welding-ui-{int(time.time() * 1000) % 100000000}",
@@ -64,7 +109,7 @@ def publish_control_event(event: dict[str, Any]) -> None:
         info = client.publish(TOPIC, json.dumps(event, ensure_ascii=False), qos=1)
         info.wait_for_publish(timeout=5)
         if info.rc != mqtt.MQTT_ERR_SUCCESS or not info.is_published():
-            raise RuntimeError(f"Az MQTT-műveletet nem sikerült visszaigazolni (rc={info.rc}).")
+            raise RuntimeError(f"Az MQTT-műveletet nem igazolta vissza a broker (rc={info.rc}).")
     finally:
         client.loop_stop()
         client.disconnect()
@@ -75,7 +120,7 @@ def read_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFram
         return tuple(pd.DataFrame() for _ in range(5))  # type: ignore[return-value]
     with sqlite3.connect(DB_PATH, timeout=5) as conn:
         bodies = pd.read_sql_query("SELECT * FROM bodies ORDER BY started_at DESC", conn)
-        events = pd.read_sql_query("SELECT * FROM weld_events ORDER BY id DESC LIMIT 1500", conn)
+        events = pd.read_sql_query("SELECT * FROM weld_events ORDER BY id DESC LIMIT 1800", conn)
         rework = pd.read_sql_query("SELECT * FROM rework_queue ORDER BY created_at DESC", conn)
         errors = pd.read_sql_query("SELECT * FROM system_errors ORDER BY id DESC LIMIT 100", conn)
         actions = pd.read_sql_query("SELECT * FROM rework_actions ORDER BY id DESC LIMIT 100", conn)
@@ -85,238 +130,370 @@ def read_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFram
 def json_list(value: Any) -> list[str]:
     try:
         result = json.loads(value or "[]")
-        return [str(x) for x in result] if isinstance(result, list) else []
+        return [str(item) for item in result] if isinstance(result, list) else []
     except (TypeError, json.JSONDecodeError):
         return []
 
 
-with st.sidebar:
-    st.header("Gyártási konfiguráció")
-    options = {cfg["config_id"]: cfg["label"] for cfg in CATALOG}
-    selected_config_id = st.selectbox(
-        "Járműmodell és alkatrész",
-        options=list(options),
-        format_func=lambda value: options[value],
-    )
-    selected_config = CONFIG_BY_ID[selected_config_id]
-    limits = selected_config["limits"]
-    st.caption(f"Excel-konfiguráció: {selected_config_id}")
-    st.metric("Elvárt hegesztési pontok", selected_config["expected_count"])
-    st.markdown("**Excelből olvasott határértékek**")
-    st.write(f"Áramerősség: {limits.current_min:g}–{limits.current_max:g} kA")
-    st.write(f"Hegesztési idő: {limits.weld_time_min:g}–{limits.weld_time_max:g} ms")
-    st.write(f"Elektródaerő: {limits.force_min:g}–{limits.force_max:g} kN")
-    fault_rate = st.slider("Hibák valószínűsége", 0.0, 0.30, 0.06, 0.01)
-    delay_ms = st.slider("Szimulációs pontköz (ms)", 20, 250, 90, 10)
-    st.caption("Lassabb beállításnál a mérési pontok érkezés közben is látszanak a felületen.")
-    if st.button("▶ Új oldalfal indítása", type="primary", use_container_width=True):
+def automatic_production_worker(
+    stop_event: threading.Event, state: dict[str, Any], config_ids: list[str]
+) -> None:
+    """Publish a new, randomly selected model sidewall every five seconds."""
+    state["running"] = True
+    previous_config = ""
+    while not stop_event.is_set():
+        cycle_started = time.monotonic()
+        options = [value for value in config_ids if value != previous_config] or config_ids
+        config_id = random.choice(options)
+        previous_config = config_id
         try:
-            body_id, generated = generate_body_events(selected_config_id, fault_rate)
-            status = {"running": True, "completed": False, "error": None, "body_id": body_id}
-            worker = threading.Thread(
-                target=publisher_worker, args=(generated, delay_ms, status), daemon=True,
-                name=f"welding-publisher-{body_id}",
+            body_id, events = generate_body_events(
+                config_id, fault_rate=float(state.get("fault_rate", DEFAULT_FAULT_RATE))
             )
-            st.session_state["last_body_id"] = body_id
-            st.session_state["publisher_status"] = status
-            st.session_state["publisher_thread"] = worker
-            worker.start()
-            st.toast(f"Az oldalfal eseményeinek küldése elindult: {body_id}")
+            state["body_id"] = body_id
+            state["config_id"] = config_id
+            state["last_started_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
+            state["error"] = None
+            publish_events(events, delay_ms=PUBLISH_DELAY_MS)
+            state["completed_cycles"] = int(state.get("completed_cycles", 0)) + 1
+            state["last_sent_body_id"] = body_id
         except Exception as exc:
-            st.error(f"Nem sikerült elindítani a szimulációt: {exc}")
-    st.divider()
-    st.caption(
-        "A modell/oldalfal pontlistáját és a névleges paramétereket a GitHubon verziózott "
-        "config/welding_catalog.xlsx adja. Az SQLite csak méréseket, állapotokat, hibákat és utómunka-naplót tárol."
+            state["error"] = str(exc)
+        wait_seconds = max(0.0, AUTO_INTERVAL_SECONDS - (time.monotonic() - cycle_started))
+        stop_event.wait(wait_seconds)
+    state["running"] = False
+
+
+def start_automatic_production() -> None:
+    """Start the cycle worker once per Streamlit session."""
+    old_thread = st.session_state.get("auto_thread")
+    old_stop = st.session_state.get("auto_stop_event")
+    if old_thread is not None and old_thread.is_alive() and old_stop is not None and not old_stop.is_set():
+        return
+    if old_thread is not None and old_thread.is_alive() and old_stop is not None:
+        old_thread.join(timeout=1.0)
+    stop_event = threading.Event()
+    state = {
+        "running": True, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
+        "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
+        "error": None,
+    }
+    worker = threading.Thread(
+        target=automatic_production_worker, args=(stop_event, state, list(CONFIG_BY_ID)),
+        name="automatic-welding-production", daemon=True,
     )
-    st.caption("Az Excel-munkafüzet módosítása után indítsd újra az alkalmazást a katalógus újraolvasásához.")
+    st.session_state["auto_stop_event"] = stop_event
+    st.session_state["auto_state"] = state
+    st.session_state["auto_thread"] = worker
+    worker.start()
+
+
+def render_spot_grid(config: dict[str, Any], body_events: pd.DataFrame, completed: bool) -> tuple[int, int, int, int]:
+    """Render a concise visual overview instead of a tall per-weld table."""
+    latest_by_id: dict[str, pd.Series] = {}
+    counts: dict[str, int] = {}
+    if not body_events.empty:
+        for _, row in body_events.sort_values("id").iterrows():
+            weld_id = str(row["weld_id"])
+            latest_by_id[weld_id] = row
+            counts[weld_id] = counts.get(weld_id, 0) + 1
+    html_cells: list[str] = []
+    ok = waiting = bad = warn = 0
+    for point in config["points"]:
+        weld_id = str(point["weld_id"])
+        row = latest_by_id.get(weld_id)
+        count = counts.get(weld_id, 0)
+        errors = json_list(row.get("errors_json", "[]")) if row is not None else []
+        if count == 0:
+            css, label = ("spot-bad", "Hiányzó") if completed else ("spot-wait", "Várakozik")
+            if completed:
+                bad += 1
+            else:
+                waiting += 1
+        elif count > 1 or bool(row.get("duplicate", 0)):
+            css, label = "spot-warn", "Duplikált"
+            warn += 1
+        elif errors:
+            css, label = "spot-bad", "; ".join(errors)
+            bad += 1
+        else:
+            css, label = "spot-ok", "Megfelelő"
+            ok += 1
+        order_label = f"{int(point['order']):03d}"
+        html_cells.append(
+            f'<span class="spot {css}" title="{html.escape(weld_id + " · " + label, quote=True)}">{order_label}</span>'
+        )
+    st.markdown('<div class="spot-grid">' + "".join(html_cells) + "</div>", unsafe_allow_html=True)
+    return ok, waiting, bad, warn
+
+
+st.markdown(
+    """
+    <div class="hero">
+      <div>
+        <div class="hero-title">BODYLINE <span style="color:#2457d6">/</span> Oldalfal-hegesztés</div>
+        <div class="hero-sub">Ipar 4.0 · élő gyártási állapot · automatikus modellváltás · MQTT</div>
+      </div>
+      <div class="pill pill-live"><span class="dot"></span> SZIMULÁCIÓS CELLAFELÜGYELET</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+if "auto_state" not in st.session_state:
+    start_automatic_production()
+
+production_tab, statistics_tab = st.tabs(["◉  Élő gyártás", "▦  Statisztika és utómunka"])
 
 
 @st.fragment(run_every="1s")
-def live_monitor_panel() -> None:
-    try:
-        bodies, events, rework, errors, actions = read_tables()
-    except (sqlite3.Error, pd.errors.DatabaseError) as exc:
-        st.error(f"Az adatbázis nem olvasható. Ellenőrizd, hogy fut-e a monitor: {exc}")
-        return
+def render_production_tab() -> None:
+    bodies, events, rework, errors, actions = read_tables()
+    auto_state = st.session_state["auto_state"]
+    stop_event = st.session_state["auto_stop_event"]
+    running = bool(auto_state.get("running")) and not stop_event.is_set()
 
-    publish_status = st.session_state.get("publisher_status")
-    if publish_status:
-        if publish_status.get("running"):
-            st.info(f"MQTT-adatküldés folyamatban: {publish_status['body_id']} — a pontadatok érkezéskor jelennek meg.")
-        elif publish_status.get("error"):
-            st.error(f"Az MQTT-küldés hibával leállt: {publish_status['error']}")
-        elif publish_status.get("completed"):
-            st.success(f"Az oldalfal összes szimulált eseményét elküldtük: {publish_status['body_id']}")
+    head_left, head_right = st.columns([5, 1.3], vertical_alignment="center")
+    with head_left:
+        st.markdown("## Gyártócella élő nézete")
+        st.caption(f"Új karosszéria automatikus indítása · {AUTO_INTERVAL_SECONDS:.0f} mp-es ciklus · véletlenszerű modellválasztás")
+    with head_right:
+        if running:
+            if st.button("Ⅱ  Automatika leállítása", key="stop_auto", use_container_width=True):
+                stop_event.set()
+                st.toast("Az automatikus gyártás leállítása elküldve.")
+                st.rerun(scope="fragment")
+        else:
+            if st.button("▶  Automatika indítása", key="start_auto", type="primary", use_container_width=True):
+                start_automatic_production()
+                st.rerun(scope="fragment")
 
-    if bodies.empty:
-        st.info("Várakozás az első oldalfalra. Indítsd el a brokert és a monitort, majd válassz modellt.")
-        return
+    total = len(bodies)
+    completed = bodies[~bodies["status"].eq("FOLYAMATBAN")] if total else pd.DataFrame()
+    good_count = int(completed["status"].eq("MEGFELELŐ").sum()) if not completed.empty else 0
+    failed_count = int(completed["status"].astype(str).str.contains("SELEJT").sum()) if not completed.empty else 0
+    open_count = int((rework["status"] != REWORK_DONE).sum()) if not rework.empty else 0
+    pass_pct = (100 * good_count / len(completed)) if not completed.empty else 100.0
 
-    in_progress = bodies[bodies["status"] == "FOLYAMATBAN"]
-    current = in_progress.iloc[0] if not in_progress.empty else bodies.iloc[0]
-    body_id = str(current["body_id"])
-    config_id = str(current.get("config_id") or "")
-    try:
-        config = get_configuration(config_id)
-        expected_ids = list(config["expected_weld_ids"])
-    except CatalogError:
-        config = None
-        expected_ids = json_list(current.get("expected_ids_json", "[]"))
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Feldolgozott oldalfalak", f"{total:,}".replace(",", " "))
+    k2.metric("Megfelelt", f"{good_count:,}".replace(",", " "), delta=f"{pass_pct:.1f}% megfelelési arány")
+    k3.metric("Utómunka / selejt", f"{failed_count:,}".replace(",", " "))
+    k4.metric("Nyitott utómunka", f"{open_count:,}")
 
-    body_events = events[events["body_id"] == body_id].copy() if not events.empty else pd.DataFrame()
+    body_id = str(auto_state.get("body_id") or "")
+    config_id = str(auto_state.get("config_id") or "")
+    current_row = None
+    if not bodies.empty:
+        if body_id:
+            rows = bodies[bodies["body_id"].astype(str).eq(body_id)]
+            if not rows.empty:
+                current_row = rows.iloc[0]
+        if current_row is None:
+            in_progress = bodies[bodies["status"].eq("FOLYAMATBAN")]
+            current_row = in_progress.iloc[0] if not in_progress.empty else bodies.iloc[0]
+        body_id = str(current_row["body_id"])
+        config_id = str(current_row.get("config_id") or config_id)
+    config = CONFIG_BY_ID.get(config_id) or CATALOG[0]
+    body_events = events[events["body_id"].astype(str).eq(body_id)].copy() if body_id and not events.empty else pd.DataFrame()
     if not body_events.empty:
         body_events = body_events.sort_values("id")
-    counts = body_events["weld_id"].astype(str).value_counts().to_dict() if not body_events.empty else {}
-    seen_expected = len(set(counts).intersection(expected_ids))
-    expected_count = len(expected_ids) if expected_ids else int(current.get("expected_count", 0) or 0)
-    progress = min(seen_expected / expected_count, 1.0) if expected_count else 0.0
-    is_active = str(current["status"]) == "FOLYAMATBAN"
+    seen = set(body_events["weld_id"].astype(str)) if not body_events.empty else set()
+    expected = int(config["expected_count"])
+    progress = min(1.0, len(seen.intersection(config["expected_weld_ids"])) / expected) if expected else 0.0
+    body_status = str(current_row["status"]) if current_row is not None else "VÁRAKOZÁS"
+    is_complete = body_status != "FOLYAMATBAN" and body_status != "VÁRAKOZÁS" and bool(body_id)
 
-    st.subheader("Aktuális oldalfal a gyártócella végén")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Oldalfal azonosító", body_id)
-    c2.metric("Járműmodell", f"{config['brand']} {config['model']}" if config else str(current["body_type"]))
-    c3.metric("Alkatrész", config["part"] if config else "Nem elérhető")
-    c4.metric("Elvárt pontok", f"{seen_expected} / {expected_count}")
-    c5.metric("Paraméterhibák", int(current.get("parameter_errors", 0) or 0))
-    st.progress(progress, text=f"Pontteljesség: {progress:.0%} · {'HEGESZTÉS FOLYAMATBAN' if is_active else str(current['status'])}")
-    if is_active:
-        st.info("A karosszéria-oldalfal feldolgozás alatt áll; a ponttérkép és a mérések frissülnek.")
-    elif str(current["status"]) == "MEGFELELŐ":
-        st.success("Az oldalfal megfelelt a szimulált ellenőrzésnek.")
-    else:
-        st.error("SELEJT: az oldalfal automatikusan bekerült az utómunka-sorba.")
+    state_class = "pill-live" if running else "pill-off"
+    state_text = "AUTOMATIKUS ÜZEM" if running else "SZÜNETEL"
+    model_label = f'{config["brand"]} {config["model"]}'
+    st.markdown(
+        f"""
+        <div class="hero" style="margin-top:.65rem;padding:.8rem 1rem">
+          <div>
+            <div class="hero-title" style="font-size:1.05rem">{html.escape(model_label)} <span style="color:#96a4b8">/</span> Bal oldalfal</div>
+            <div class="hero-sub">Azonosító: {html.escape(body_id or "Első karosszériára vár")} · Utolsó indítás: {html.escape(str(auto_state.get("last_started_at") or "—"))}</div>
+          </div>
+          <div class="pill {state_class}"><span class="dot"></span> {state_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if auto_state.get("error"):
+        st.warning(f"MQTT-küldési hiba: {auto_state['error']} — ellenőrizd, hogy fut-e a Docker Desktop és a monitor.")
+    st.progress(progress, text=f"Pontteljesség  {len(seen.intersection(config['expected_weld_ids']))} / {expected}  ·  {progress:.0%}")
 
-    st.markdown("**Legutóbb beérkezett hegesztési mérés**")
     latest = body_events.iloc[-1] if not body_events.empty else None
-    m1, m2, m3, m4 = st.columns(4)
+    metric_cols = st.columns(4)
     if latest is None:
-        m1.metric("Hegesztési pont", "Még nincs adat")
-        m2.metric("Áramerősség", "—")
-        m3.metric("Hegesztési idő", "—")
-        m4.metric("Elektródaerő", "—")
+        values = [("Utolsó hegesztési pont", "—"), ("Áramerősség", "Várakozik"), ("Hegesztési idő", "—"), ("Elektródaerő", "—")]
     else:
-        m1.metric("Hegesztési pont", str(latest["weld_id"]))
-        m2.metric("Áramerősség", f"{latest['current_ka']} kA" if pd.notna(latest["current_ka"]) else "HIÁNYZIK")
-        m3.metric("Hegesztési idő", f"{latest['weld_time_ms']} ms" if pd.notna(latest["weld_time_ms"]) else "HIÁNYZIK")
-        m4.metric("Elektródaerő", f"{latest['electrode_force_kn']} kN" if pd.notna(latest["electrode_force_kn"]) else "HIÁNYZIK")
+        values = [
+            ("Utolsó hegesztési pont", str(latest["weld_id"])),
+            ("Áramerősség", f"{latest['current_ka']} kA" if pd.notna(latest["current_ka"]) else "Hiányzik"),
+            ("Hegesztési idő", f"{latest['weld_time_ms']} ms" if pd.notna(latest["weld_time_ms"]) else "Hiányzik"),
+            ("Elektródaerő", f"{latest['electrode_force_kn']} kN" if pd.notna(latest["electrode_force_kn"]) else "Hiányzik"),
+        ]
+    for col, (label, value) in zip(metric_cols, values):
+        col.markdown(
+            f'<div class="reading"><div><div class="reading-label">{html.escape(label)}</div>'
+            f'<div class="reading-value">{html.escape(value)}</div></div></div>',
+            unsafe_allow_html=True,
+        )
 
-    # One record per Excel-defined spot weld, plus any unexpected incoming IDs.
-    point_records: list[dict[str, Any]] = []
-    for point in (config["points"] if config else [{"weld_id": wid, "name": wid, "order": idx} for idx, wid in enumerate(expected_ids)]):
-        weld_id = point["weld_id"]
-        matching = body_events[body_events["weld_id"].astype(str) == weld_id] if not body_events.empty else pd.DataFrame()
-        count = len(matching)
-        newest = matching.iloc[-1] if count else None
-        point_errors = json_list(newest["errors_json"]) if newest is not None else []
-        if count == 0:
-            point_status, marker = ("FOLYAMATBAN", "⏳") if is_active else ("HIÁNYZIK", "❌")
-        elif count > 1 or (newest is not None and bool(newest["duplicate"])):
-            point_status, marker = "DUPLIKÁLT", "⚠️"
-        elif point_errors:
-            point_status, marker = "PARAMÉTERHIBA", "❌"
+    st.markdown('<div class="section-label">Oldalfal hegesztési ponttérképe</div>', unsafe_allow_html=True)
+    ok, waiting, bad, warn = render_spot_grid(config, body_events, is_complete)
+    st.markdown(
+        f"""
+        <div class="legend">
+          <span><i style="background:#dff7ed"></i>{ok} rendben</span>
+          <span><i style="background:#edf1f6"></i>{waiting} várakozik</span>
+          <span><i style="background:#ffe5e8"></i>{bad} hiányzó/hibás</span>
+          <span><i style="background:#fff1ce"></i>{warn} duplikált</span>
+          <span class="compact-note">Összesen {expected} pont · a szám a pont sorrendjét jelöli</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if not running and not stop_event.is_set():
+        st.info("Az automatikus üzem elindulhat a fenti gombbal.")
+    st.caption("Oktatási célú szimuláció: a pontlista és a határértékek szintetikusak, nem gyártói specifikációk.")
+
+
+@st.fragment(run_every="2s")
+def render_statistics_tab() -> None:
+    bodies, events, rework, errors, actions = read_tables()
+    st.markdown("## Minőségügyi áttekintés")
+    if bodies.empty:
+        st.info("Az adatbázis még nem kapott karosszéria-eseményt. Ellenőrizd a Docker MQTT-brokert és a python -m src.monitor folyamatot.")
+        return
+
+    completed = bodies[~bodies["status"].eq("FOLYAMATBAN")].copy()
+    good = int(completed["status"].eq("MEGFELELŐ").sum()) if not completed.empty else 0
+    failed = int(completed["status"].astype(str).str.contains("SELEJT").sum()) if not completed.empty else 0
+    pass_pct = 100 * good / len(completed) if not completed.empty else 100.0
+    open_rework = int((rework["status"] != REWORK_DONE).sum()) if not rework.empty else 0
+    avg_points = float(completed["expected_count"].mean()) if not completed.empty and "expected_count" in completed else 0.0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Összes oldalfal", len(bodies))
+    m2.metric("Megfelelési arány", f"{pass_pct:.1f}%")
+    m3.metric("Selejtarány", f"{100 * failed / len(completed):.1f}%" if len(completed) else "0.0%")
+    m4.metric("Átlagos elvárt pontszám", f"{avg_points:.1f}")
+
+    chart_left, chart_right = st.columns([1.2, 1])
+    with chart_left:
+        st.markdown("### Gyártási eredmények modellenként")
+        if "config_id" in bodies:
+            model_counts = bodies.groupby("config_id")["status"].value_counts().unstack(fill_value=0)
+            chart_rows = []
+            for config_id, row in model_counts.iterrows():
+                cfg = CONFIG_BY_ID.get(str(config_id))
+                chart_rows.append({
+                    "Modell": f'{cfg["brand"]} {cfg["model"]}' if cfg else str(config_id),
+                    "Megfelelt": int(row.get("MEGFELELŐ", 0)),
+                    "Utómunka": int(row.get("SELEJT / UTÓMUNKÁRA KÜLDVE", 0)),
+                })
+            if chart_rows:
+                st.bar_chart(pd.DataFrame(chart_rows).set_index("Modell"), height=260)
+    with chart_right:
+        st.markdown("### Minőségi állapotok")
+        status_counts = completed["status"].value_counts().rename_axis("Állapot").reset_index(name="Darab")
+        if status_counts.empty:
+            st.caption("Még nincs lezárt karosszéria.")
         else:
-            point_status, marker = "MEGFELELŐ", "✅"
-        point_records.append({
-            "Pont": weld_id, "Megnevezés": point.get("name", weld_id),
-            "Állapot": point_status, "Üzenetek": count,
-            "Áramerősség (kA)": newest["current_ka"] if newest is not None else None,
-            "Hegesztési idő (ms)": newest["weld_time_ms"] if newest is not None else None,
-            "Elektródaerő (kN)": newest["electrode_force_kn"] if newest is not None else None,
-            "Hiba / megjegyzés": "; ".join(point_errors),
-            "_map_label": f"{marker} {weld_id}",
-        })
+            st.dataframe(status_counts, use_container_width=True, hide_index=True, height=260)
+        fault_rate = st.slider(
+            "Mesterséges hibák valószínűsége",
+            min_value=0.0, max_value=0.01, value=float(st.session_state["auto_state"].get("fault_rate", DEFAULT_FAULT_RATE)),
+            step=0.0001, format="%.4f", key="fault_rate_control",
+            help="Csak a következő karosszériákra érvényes. Alapérték: 0,0001; a gyári technológiai értékek szimuláltak.",
+        )
+        st.session_state["auto_state"]["fault_rate"] = fault_rate
 
-    expected_set = set(expected_ids)
-    for weld_id in sorted(set(counts) - expected_set):
-        matching = body_events[body_events["weld_id"].astype(str) == weld_id]
-        newest = matching.iloc[-1]
-        point_records.append({
-            "Pont": weld_id, "Megnevezés": "Váratlan pontazonosító",
-            "Állapot": "VÁRATLAN PONT", "Üzenetek": len(matching),
-            "Áramerősség (kA)": newest["current_ka"], "Hegesztési idő (ms)": newest["weld_time_ms"],
-            "Elektródaerő (kN)": newest["electrode_force_kn"],
-            "Hiba / megjegyzés": "Nem szerepel az Excel-katalógus elvárt pontlistájában.",
-            "_map_label": f"⚠️ {weld_id}",
-        })
-
-    st.markdown("**Oldalfal hegesztési ponttérképe** — ✅ rendben · ⏳ még nem érkezett meg · ❌ hiányzó/paraméterhiba · ⚠️ duplikált/váratlan")
-    labels = [row["_map_label"] for row in point_records]
-    if labels:
-        width = 8
-        grid_rows = [labels[i:i + width] for i in range(0, len(labels), width)]
-        grid_df = pd.DataFrame([row + [""] * (width - len(row)) for row in grid_rows],
-                               columns=[f"Pontcsoport {i + 1}" for i in range(width)])
-        st.dataframe(grid_df, use_container_width=True, hide_index=True, height=min(430, 36 * (len(grid_rows) + 1)))
-    with st.expander("Az oldalfal összes hegesztési pontjának paraméterei", expanded=False):
-        if point_records:
-            st.dataframe(pd.DataFrame(point_records).drop(columns=["_map_label"]),
-                         use_container_width=True, hide_index=True, height=380)
-
-    st.subheader("Oldalfalak ellenőrzési előzményei")
-    history = bodies.copy()
-    for source, label in [
-        ("missing_ids_json", "Hiányzó pontok"),
-        ("unexpected_ids_json", "Váratlan pontok"),
-        ("duplicate_ids_json", "Duplikált pontok"),
-    ]:
-        history[label] = history[source].apply(lambda x: ", ".join(json_list(x)))
-    hist_cols = ["body_id", "config_id", "body_type", "expected_count", "event_count", "status",
-                 "parameter_errors", "latency_ms", "Hiányzó pontok", "Váratlan pontok",
-                 "Duplikált pontok", "started_at", "completed_at"]
-    st.dataframe(history[hist_cols], use_container_width=True, hide_index=True, height=230)
-
-    st.subheader("Automatikus utómunka-sor")
+    st.markdown("### Automatikus utómunka-sor")
     if rework.empty:
-        st.success("Jelenleg nincs selejtes oldalfal az utómunka-soron.")
+        st.success("Jelenleg nincs utómunka-bejegyzés.")
     else:
-        active_rework = rework[rework["status"] != REWORK_DONE]
         a, b, c = st.columns(3)
         a.metric("Összes utómunka-eset", len(rework))
-        b.metric("Nyitott esetek", len(active_rework))
-        c.metric("Utómunka adminisztratívan lezárva", int((rework["status"] == REWORK_DONE).sum()))
-        st.dataframe(rework[["body_id", "reason", "status", "created_at", "updated_at", "resolution_note"]],
-                     use_container_width=True, hide_index=True)
-        for _, item in rework.iterrows():
-            queue_id = str(item["body_id"])
-            with st.expander(f"{queue_id} — {item['status']}"):
-                st.write("**Hiba oka:** " + str(item["reason"]))
-                note = st.text_input("Utómunka megjegyzése", key=f"note_{queue_id}")
-                if item["status"] == REWORK_WAITING:
-                    if st.button("Utómunka megkezdése", key=f"start_{queue_id}"):
-                        try:
-                            publish_control_event({"event_type": "rework_action", "body_id": queue_id,
-                                "action": "START", "note": note, "timestamp": pd.Timestamp.now(tz="UTC").isoformat()})
-                            st.toast("Az utómunka megkezdését MQTT-n elküldtem.")
-                        except Exception as exc:
-                            st.error(f"Nem sikerült rögzíteni az utómunkát: {exc}")
-                elif item["status"] == REWORK_IN_PROGRESS:
-                    if st.button("Utómunka kész — újraellenőrzés szükséges", key=f"complete_{queue_id}"):
-                        try:
-                            publish_control_event({"event_type": "rework_action", "body_id": queue_id,
-                                "action": "COMPLETE", "note": note, "timestamp": pd.Timestamp.now(tz="UTC").isoformat()})
-                            st.toast("Utómunka lezárva; az oldalfal újraellenőrzésre vár.")
-                        except Exception as exc:
-                            st.error(f"Nem sikerült lezárni az utómunkát: {exc}")
-                else:
-                    st.caption("Az utómunka adminisztratívan lezárult, de az eredeti selejtes minősítés megmarad.")
+        b.metric("Nyitott esetek", open_rework)
+        c.metric("Adminisztratívan lezárt", int(rework["status"].eq(REWORK_DONE).sum()))
+        active = rework[rework["status"] != REWORK_DONE]
+        st.dataframe(
+            active[["body_id", "reason", "status", "created_at"]].head(30),
+            use_container_width=True, hide_index=True, height=190,
+        )
+        if not active.empty:
+            options = {
+                f'{row["body_id"]} — {row["status"]}': row
+                for _, row in active.iterrows()
+            }
+            selected_label = st.selectbox("Kezelendő utómunka", list(options), key="selected_rework")
+            item = options[selected_label]
+            note = st.text_input("Operátori megjegyzés", key=f"rework_note_{item['body_id']}")
+            left, right = st.columns(2)
+            if item["status"] == REWORK_WAITING:
+                if left.button("Utómunka megkezdése", key=f"rework_start_{item['body_id']}", use_container_width=True):
+                    try:
+                        publish_control_event({"event_type": "rework_action", "body_id": str(item["body_id"]),
+                            "action": "START", "note": note, "timestamp": pd.Timestamp.now(tz="UTC").isoformat()})
+                        st.toast("Utómunka megkezdését elküldtem.")
+                    except Exception as exc:
+                        st.error(f"Az utómunka nem indítható: {exc}")
+            elif item["status"] == REWORK_IN_PROGRESS:
+                if left.button("Utómunka kész — újraellenőrzés", key=f"rework_complete_{item['body_id']}", type="primary", use_container_width=True):
+                    try:
+                        publish_control_event({"event_type": "rework_action", "body_id": str(item["body_id"]),
+                            "action": "COMPLETE", "note": note, "timestamp": pd.Timestamp.now(tz="UTC").isoformat()})
+                        st.toast("Utómunka lezárási esemény elküldve.")
+                    except Exception as exc:
+                        st.error(f"Az utómunka nem zárható le: {exc}")
+            right.caption("Az utómunka lezárása nem írja át automatikusan a selejtes minősítést.")
+
+    with st.expander("Karosszéria-előzmények", expanded=False):
+        history = bodies.copy()
+        for source, label in [
+            ("missing_ids_json", "Hiányzó pontok"),
+            ("unexpected_ids_json", "Váratlan pontok"),
+            ("duplicate_ids_json", "Duplikált pontok"),
+        ]:
+            if source in history:
+                history[label] = history[source].apply(lambda value: ", ".join(json_list(value)))
+        cols = [c for c in [
+            "body_id", "config_id", "body_type", "expected_count", "event_count", "status",
+            "parameter_errors", "latency_ms", "Hiányzó pontok", "Váratlan pontok",
+            "Duplikált pontok", "started_at", "completed_at",
+        ] if c in history]
+        st.dataframe(history[cols].head(50), use_container_width=True, hide_index=True, height=250)
+
+    with st.expander("Mérési napló – legutóbbi 100 hegesztés", expanded=False):
+        if events.empty:
+            st.caption("Még nincs mérési adat.")
+        else:
+            cols = [c for c in [
+                "timestamp", "body_id", "config_id", "weld_id", "current_ka",
+                "weld_time_ms", "electrode_force_kn", "errors_json", "duplicate",
+            ] if c in events]
+            st.dataframe(events[cols].head(100), use_container_width=True, hide_index=True, height=300)
+
+    with st.expander("Utómunka-eseménynapló", expanded=False):
+        if actions.empty:
+            st.caption("Még nincs utómunka-művelet.")
+        else:
+            st.dataframe(actions[["timestamp", "body_id", "action", "note"]].head(100),
+                         use_container_width=True, hide_index=True, height=220)
 
     with st.expander("MQTT- és feldolgozási hibák", expanded=False):
         if errors.empty:
-            st.success("Nincs naplózott üzenetfeldolgozási hiba.")
+            st.success("Nincs naplózott feldolgozási hiba.")
         else:
-            st.dataframe(errors[["received_at", "category", "detail", "raw_payload"]],
+            st.dataframe(errors[["received_at", "category", "detail", "raw_payload"]].head(50),
                          use_container_width=True, hide_index=True, height=220)
-    with st.expander("Utómunka-eseménynapló", expanded=False):
-        if actions.empty:
-            st.info("Még nincs utómunka-művelet.")
-        else:
-            st.dataframe(actions[["timestamp", "body_id", "action", "note"]],
-                         use_container_width=True, hide_index=True, height=180)
-
-    st.caption("Adatút: XLSX referenciakatalógus → szimulátor → MQTT/Mosquitto → monitor és ellenőrző → SQLite futásnapló → élő dashboard.")
-    st.caption("A felület 2 másodpercenként frissül; az adatbázis nem helyettesíti az Excel referencia-konfigurációt.")
 
 
-live_monitor_panel()
+with production_tab:
+    render_production_tab()
+
+with statistics_tab:
+    render_statistics_tab()
