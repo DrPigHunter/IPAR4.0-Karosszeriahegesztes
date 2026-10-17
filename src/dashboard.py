@@ -351,7 +351,9 @@ def automatic_production_worker(
                     **scheduled_change,
                     "replacement_interval_bodies": tool_change_interval,
                     "automatic_tool_change_enabled": auto_tool_change_enabled,
-                    "planned_execution_window": "next_inter_body_pause",
+                    "planned_execution_window": "next_simulated_shift_break",
+                    "break_trigger_basis": "completed_sidewall_cycles",
+                    "simulated_break_interval_weld_points": 14_000,
                     "simulated_change_duration_seconds": tool_change_duration,
                 }, level="INFO" if auto_tool_change_enabled else "WARNING")
             persist_equipment_state(state)
@@ -400,11 +402,12 @@ def automatic_production_worker(
                 ))),
             )
             pause_started = time.monotonic()
-            safe_application_log("electrode_tool_change_started", {
+            safe_application_log("welding_head_change_started_during_shift_break", {
                 "body_id": wear_state.get("pending_tool_change_body_id", body_id),
                 "current_tool_number": wear_state.get("current_tool_number", 1),
                 "simulated_change_duration_seconds": tool_change_duration,
                 "planned_inter_body_pause_seconds": inter_body_pause_seconds,
+                "break_interval_sidewalls": int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)),
             })
             # A deliberate short simulated maintenance task; if longer than the
             # configured pause, it extends the downtime rather than being cut short.
@@ -420,7 +423,7 @@ def automatic_production_worker(
                 log_tool_replacement(
                     state, change,
                     int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)),
-                    execution_window="inter_body_pause",
+                    execution_window="scheduled_shift_break_during_inter_body_downtime",
                     simulated_duration_seconds=tool_change_duration,
                     scheduled_pause_seconds=inter_body_pause_seconds,
                 )
