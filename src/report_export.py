@@ -12,6 +12,8 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from src.catalog import list_configurations
+from src.parameter_audit import build_parameter_audit
 from src.wear_control import (
     COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     COOLANT_INLET_TARGET_MAX_C,
@@ -441,6 +443,7 @@ def export_production_report(
         "Hegesztési adatok": tables["weld_events"],
         "Kopás és önkorrekció": _make_wear_summary_frame(tables["weld_events"]),
         "Eszközcsere-napló": _make_tool_change_frame(file_logs["application_log"]),
+        "Paraméter-audit": pd.DataFrame(build_parameter_audit(list_configurations())),
         "Utómunka sor": tables["rework_queue"],
         "Utómunka műveletek": tables["rework_actions"],
         "Rendszerhibák": tables["system_errors"],
