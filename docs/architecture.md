@@ -55,7 +55,7 @@ A GitHubon tárolt, két munkalapos Excel-munkafüzet tíz modell–alkatrész k
 4. Hibás JSON, ismeretlen eseménytípus, hiányzó azonosító és ismeretlen konfiguráció a `system_errors` naplóba kerül.
 5. Nem megfelelő lezárt oldalfal automatikusan `SELEJT / UTÓMUNKÁRA KÜLDVE` állapotot kap, és bekerül a rework queue-ba.
 6. Utómunka állapotmenet: `UTÓMUNKÁRA VÁR` → `UTÓMUNKA FOLYAMATBAN` → `UTÓMUNKA ELVÉGEZVE – ÚJRAELLENŐRZÉS SZÜKSÉGES`. Ez az utolsó állapot sem minősíti automatikusan megfelelőre a korábbi selejtes darabot.
-7. A dashboard 2 másodpercenként frissül.
+7. Az élő gyártási fül 1 másodpercenként, a statisztika fül 2 másodpercenként frissül.
 
 ## Üzemeltetési vezérlés és jelentés
 
