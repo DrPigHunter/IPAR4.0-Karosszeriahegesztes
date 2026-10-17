@@ -109,13 +109,17 @@ A **Napló és export** fül az adatbázis összes karosszéria-, hegesztési po
 Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉÉÉ-HH-NN_ÓÓ-PP-MP_ffffff.xlsx`.
 
 
-## Elektródakopás és automatikus önkorrekció
+## Elektródakopás, hűtés, önkorrekció és eszközcsere
 
-A külön fejlesztési ágban elérhető kopásmodell fokozatosan növeli az elektróda kopottságát, és csökkenti a **szintetikus** minőségi/hőbeviteli mutatót. A Statisztika és utómunka fülön állítható a kopási ráta, a kopásmodell, illetve az önkorrekció. A vezérlő a 95%-os célérték eléréséhez előbb az áramerősséget, majd szükség esetén a hegesztési időt módosítja; minden változtatás a modell Excel-katalógusának határain belül marad. Ha a minőségi cél ezeken belül sem érhető el, a monitor hibát rögzít és az oldalfalat utómunkára küldi. A panelen az elektródacsere gomb nullázza és naplózza a kopási állapotot; a csere csak álló automatika mellett engedélyezett.
+A külön fejlesztési ág kopási indexet, (I^2 t) alapú szintetikus hőbeviteli közelítést és határértékek közötti önkorrekciót modellez. A Statisztika és utómunka fülön beállítható a kopási ütem, a hűtővíz-áramlás és a belépő/kilépő hőmérséklet, valamint az automatikus eszközcsere.
 
-A részletes pontadatokban szerepel a kopottság, a korrekció lépésszáma, a korrekció művelete, a becsült minőségi index és a sikeresség. Az Excel-export külön `Kopás és önkorrekció` munkalapon összegzi ezeket.
+Az elektródakopás a karosszériaciklusok között is megmarad, és a `data/equipment_state.json` fájlban újraindítás után is folytatódik. A csereintervallum **lezárt baloldalfal-ciklusban** állítható. Az intervallum elérése után az eszközcsere a következő ciklusok közötti szünetben történik: a régi eszköz állapota naplózódik, majd az új eszköz kopása 0%-ról indul. A szimulált csereidő a normál szünetből fogy; hosszabb csere esetén a leállás is hosszabb. Automatikus csere kikapcsolásakor a gyártás biztonságosan megáll, és kézi eszközcserét kér.
 
-**Oktatási korlátozás:** a kopási ráta és a minőségi index demonstrációs modell. Nem valós ipari recept, és az index önmagában nem bizonyítja a hegesztési kötés fizikai szilárdságát.
+Az Excel-export külön `Kopás és önkorrekció`, `Eszközcsere-napló` és `Paraméter-audit` munkalapokat tartalmazza.
+
+**Műszaki korlátozás:** az áramlépés/önkorrekció, kopásráta, csereintervallum, csereidő és a 95%-os minőségi proxy demonstrációs paraméterek, nem hitelesített gyári receptértékek. A hűtés alapértékei a TWI bevonatos/vastagabb acélhoz adott referenciaértékei (6 l/perc, max. 20 °C belépő és 30 °C kilépő), de más anyag-/pisztoly-/hűtőrendszer esetén ezeket az adott berendezés specifikációja szerint kell beállítani. A dashboard referencia-auditja csak széles plausibilitási szűrő; nem helyettesít anyag- és illesztésspecifikus hegesztési tartományvizsgálatot.
+
+Források és részletes felülvizsgálat: [Paraméter-realizmus audit](docs/parameter_realism_audit.md), [Elektródakopás és eszközcsere dokumentáció](docs/electrode_wear.md).
 
 ## Tesztek futtatása
 
