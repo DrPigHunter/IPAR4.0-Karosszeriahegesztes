@@ -496,6 +496,17 @@ def render_complete_log_tab() -> None:
         else:
             st.dataframe(file_logs["application_log"], use_container_width=True, hide_index=True, height=320)
 
+    with st.expander(f"Összesített JSON-napló ({len(file_logs['aggregate_json'])})", expanded=False):
+        if file_logs["aggregate_json"].empty:
+            st.info("Még nincs összesített JSON-napló.")
+        else:
+            st.dataframe(file_logs["aggregate_json"], use_container_width=True, hide_index=True, height=220)
+    with st.expander(f"Monitor/dashboard konzolnaplók ({len(file_logs['console_log'])} sor)", expanded=False):
+        if file_logs["console_log"].empty:
+            st.info("Konzolnapló még nincs. A naplózáshoz a projekt indítószkriptjét használd.")
+        else:
+            st.dataframe(file_logs["console_log"], use_container_width=True, hide_index=True, height=360)
+
     export_dir = ROOT / "logs" / "exports"
     export_files = []
     if export_dir.exists():
