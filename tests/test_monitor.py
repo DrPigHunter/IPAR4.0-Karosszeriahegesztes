@@ -94,6 +94,29 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(body["status"], "MEGFELELŐ")
         self.assertIsNone(queue)
 
+    def test_completed_cycle_writes_per_run_statistics_log(self):
+        log_dir = Path(self.tmp.name) / "logs"
+        body_id = "BODY-LOG-TEST"
+        process_event(self.conn, body_start(body_id))
+        for point in self.points:
+            process_event(self.conn, weld(body_id, point))
+        process_event(self.conn, complete(body_id), log_dir=log_dir)
+
+        files = list(log_dir.glob("run_*.json"))
+        self.assertEqual(len(files), 1)
+        report = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual(report["body_id"], body_id)
+        self.assertEqual(report["status"], "MEGFELELŐ")
+        self.assertEqual(report["expected_weld_points"], self.config["expected_count"])
+        self.assertEqual(report["received_unique_expected_points"], self.config["expected_count"])
+        self.assertEqual(report["point_completeness_percent"], 100.0)
+        self.assertFalse(report["rework_required"])
+        self.assertIsNotNone(report["duration_seconds"])
+        self.assertLess(report["duration_seconds"], 20.0)
+        self.assertTrue(report["within_20_second_target"])
+        self.assertTrue((log_dir / "production_summary.json").exists())
+        self.assertEqual(len(list(log_dir.glob("production_*.jsonl"))), 1)
+
     def test_rework_state_transitions_are_logged(self):
         process_event(self.conn, body_start())
         for point in self.points[1:]:
