@@ -512,19 +512,6 @@ def render_spot_grid(config: dict[str, Any], body_events: pd.DataFrame, complete
     return ok, waiting, bad, warn
 
 
-st.markdown(
-    """
-    <div class="hero">
-      <div>
-        <div class="hero-title">BODYLINE <span style="color:#2457d6">/</span> Oldalfal-hegesztés</div>
-        <div class="hero-sub">Ipar 4.0 · élő gyártási állapot · automatikus modellváltás · MQTT</div>
-      </div>
-      <div class="pill pill-live"><span class="dot"></span> SZIMULÁCIÓS CELLAFELÜGYELET</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
 # Use a fresh statistics window whenever the dashboard process is restarted.
 # Historical records remain in SQLite and the history expander, not in current-run KPIs.
 if st.session_state.get("app_process_id") != os.getpid():
@@ -549,7 +536,86 @@ if "auto_state" not in st.session_state:
     }
     st.session_state["auto_stop_event"] = threading.Event()
 
-production_tab, statistics_tab = st.tabs(["◉  Élő gyártás", "▦  Statisztika és utómunka"])
+header_left, header_right = st.columns([5.4, 1.2], vertical_alignment="center")
+with header_left:
+    st.markdown(
+        """
+        <div class="hero">
+          <div>
+            <div class="hero-title">BODYLINE <span style="color:#2457d6">/</span> Oldalfal-hegesztés</div>
+            <div class="hero-sub">Ipar 4.0 · élő gyártási állapot · automatikus modellváltás · MQTT</div>
+          </div>
+          <div class="pill pill-live"><span class="dot"></span> SZIMULÁCIÓS CELLAFELÜGYELET</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+with header_right:
+    if st.session_state.get("logged_out"):
+        st.button("✓  Munkamenet lezárva", key="logged_out_badge", disabled=True, use_container_width=True)
+    elif st.button("⎋  Kijelentkezés + Excel", key="logout_export", type="primary", use_container_width=True):
+        try:
+            # Generate and persist the first Excel snapshot before waiting for any stop.
+            report = make_excel_export(stop_automatic=True)
+            st.session_state["logout_report"] = report
+            st.session_state["logged_out"] = True
+            st.session_state["logout_export_error"] = None
+            st.rerun()
+        except Exception as exc:
+            safe_application_log("logout_export_failed", {"error": str(exc)}, level="ERROR")
+            st.session_state["logout_export_error"] = str(exc)
+            st.error(f"Nem sikerült elkészíteni az Excel-jelentést: {exc}")
+
+if st.session_state.get("logout_export_error") and not st.session_state.get("logged_out"):
+    st.error(
+        "Az export nem készült el. Az adatbázis és a korábbi naplók megmaradnak; "
+        f"próbáld újra a kijelentkezést. Részlet: {st.session_state['logout_export_error']}"
+    )
+
+if st.session_state.get("logged_out"):
+    report = st.session_state.get("logout_report")
+    st.markdown("## A munkamenet lezárult")
+    st.success("A dátummal ellátott Excel-jelentés a lemezre mentve. A letöltéshez kattints az alábbi gombra.")
+    if report:
+        summary = report.get("summary", {})
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Oldalfalak", int(summary.get("session_body_count", 0)))
+        r2.metric("Lezárt karosszériák", int(summary.get("session_completed_count", 0)))
+        r3.metric("Megfelelt", int(summary.get("session_pass_count", 0)))
+        r4.metric("Selejtes", int(summary.get("session_scrap_count", 0)))
+        st.download_button(
+            "⬇  Excel-jelentés letöltése",
+            data=report["data"],
+            file_name=report["filename"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_logout_report",
+            type="primary",
+            use_container_width=True,
+        )
+        st.code(report["path"])
+        if report.get("automatic_worker_stopped"):
+            st.caption("Az automatika leállt; a jelentés a leállás utáni utolsó adatokat is tartalmazza.")
+        else:
+            st.warning(
+                "A gyártási szál a várakozási időn belül nem állt le. Az Excel ettől függetlenül elkészült, "
+                "és a mentett adatbázist, valamint az export pillanatában folyamatban lévő oldalfal állapotát is tartalmazza. "
+                "A további események továbbra is a naplófájlokba íródnak."
+            )
+    if st.button("Új munkamenet indítása", key="new_dashboard_session"):
+        st.session_state["app_session_started_at"] = time.time()
+        st.session_state["app_session_id"] = uuid.uuid4().hex
+        st.session_state["logged_out"] = False
+        st.session_state["logout_report"] = None
+        st.session_state["logout_export_error"] = None
+        st.session_state.pop("auto_state", None)
+        st.session_state.pop("auto_thread", None)
+        st.session_state.pop("auto_stop_event", None)
+        st.rerun()
+    st.stop()
+
+production_tab, statistics_tab, log_tab = st.tabs([
+    "◉  Élő gyártás", "▦  Statisztika és utómunka", "☷  Napló és export"
+])
 
 
 @st.fragment(run_every="1s")
@@ -572,7 +638,12 @@ def render_production_tab() -> None:
         if running:
             if st.button("Ⅱ  Automatika leállítása", key="stop_auto", use_container_width=True):
                 stop_event.set()
-                st.toast("Az automatikus gyártás leállítása elküldve.")
+                auto_state["running"] = False
+                safe_application_log("automatic_production_stop_requested", {
+                    "body_id": auto_state.get("body_id", ""),
+                    "completed_cycles": auto_state.get("completed_cycles", 0),
+                })
+                st.toast("Az automatikus gyártás leállítási kérése rögzítve.")
                 st.rerun(scope="fragment")
         elif worker_alive:
             st.button(
@@ -828,3 +899,6 @@ with production_tab:
 
 with statistics_tab:
     render_statistics_tab()
+
+with log_tab:
+    render_complete_log_tab()
