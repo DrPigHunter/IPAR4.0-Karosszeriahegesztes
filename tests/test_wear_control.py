@@ -14,7 +14,7 @@ CONFIG = list_configurations()[0]
 
 class ElectrodeWearTests(unittest.TestCase):
     def test_wear_accumulates_and_controller_corrects_inside_catalog_limits(self):
-        state = {"wear_percent": 10.0}
+        state = {"wear_percent": 20.0}
         _, events = generate_body_events(
             CONFIG["config_id"],
             fault_rate=0.0,
