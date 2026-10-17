@@ -74,9 +74,10 @@ def apply_electrode_wear(
                 max(0.0, float(state["wear_percent"]) + float(wear_per_point_percent)),
             )
         wear_percent = round(float(state["wear_percent"]), 3)
+        quality_wear_percent = wear_percent if wear_enabled else 0.0
         current_before = float(event["current_ka"])
         time_before = float(event["weld_time_ms"])
-        quality_before = _quality_index(event, point, wear_percent)
+        quality_before = _quality_index(event, point, quality_wear_percent)
         steps = 0
         actions: list[str] = []
 
@@ -93,7 +94,7 @@ def apply_electrode_wear(
                 else:
                     break
                 steps += 1
-                quality_before = _quality_index(event, point, wear_percent)
+                quality_before = _quality_index(event, point, quality_wear_percent)
 
         quality_after = _quality_index(event, point, wear_percent)
         corrected = steps > 0 and quality_after >= QUALITY_TARGET_PERCENT
@@ -104,7 +105,7 @@ def apply_electrode_wear(
             "electrode_wear_percent": wear_percent,
             "simulated_quality_index_percent": quality_after,
             "quality_index_before_correction_percent": _quality_index(
-                {"current_ka": current_before, "weld_time_ms": time_before}, point, wear_percent
+                {"current_ka": current_before, "weld_time_ms": time_before}, point, quality_wear_percent
             ),
             "process_quality_ok": bool(quality_ok),
             "auto_correction_enabled": bool(auto_correct and wear_enabled),
