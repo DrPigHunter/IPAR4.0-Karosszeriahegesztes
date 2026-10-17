@@ -40,3 +40,42 @@ jobs:
             exit 1
           }
           Write-Host "PowerShell startup script syntax OK."
+
+  mqtt-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - name: Start Mosquitto
+        run: docker compose up -d mqtt
+      - name: Start monitor and wait for MQTT subscription
+        shell: bash
+        run: |
+          mkdir -p logs
+          nohup python -u -m src.monitor > logs/ci-monitor.log 2>&1 &
+          echo $! > /tmp/bodyline-monitor.pid
+          for i in $(seq 1 60); do
+            if grep -q "MQTT monitor csatlakozott" logs/ci-monitor.log; then
+              echo "Monitor subscribed to MQTT."
+              exit 0
+            fi
+            sleep 0.5
+          done
+          cat logs/ci-monitor.log
+          exit 1
+      - name: Run real MQTT-to-SQLite integration tests
+        env:
+          RUN_MQTT_INTEGRATION: "1"
+        run: python -m unittest discover -s tests -p "test_mqtt_integration.py" -v
+      - name: Stop monitor and Mosquitto
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/bodyline-monitor.pid ]; then
+            kill "$(cat /tmp/bodyline-monitor.pid)" 2>/dev/null || true
+          fi
+          docker compose down
