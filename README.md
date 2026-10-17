@@ -88,11 +88,13 @@ Az összesítő adatbázisból számol, így tartalmazhat korábbi verziókból 
 
 Az **Élő gyártás** fülön, az indítás/leállítás gomb mellett állítható a szimuláció sebessége **100% és 10 000%** között, 100%-os lépésekkel. Alapértéke 100%, ami pontosan a korábbi beállításokat jelenti: 90 ms késleltetés hegesztési eseményenként és 10 másodperc szünet két karosszéria között. 10 000%-nál ezek az ütemezett várakozások 0,9 ms-ra, illetve 0,1 másodpercre csökkennek. A kiválasztott érték a következő karosszéria-ciklustól lép életbe, és az alkalmazásnaplóban, valamint az Excel-jelentésben is rögzül.
 
-A 10 000% a szimulátor késleltetéseinek skálázását jelenti, nem garantál százszoros tényleges áteresztőképességet: a tényleges ciklusidőt az MQTT QoS 1 visszaigazolásai, a gép teljesítménye, az operációs rendszer és az adatbázis-feldolgozás is korlátozza. A 20 másodperces célértéket minden ciklusnál továbbra is ténylegesen mérjük.
+A 10 000% a szimulátor késleltetéseinek skálázását jelenti, nem garantál százszoros tényleges áteresztőképességet: a tényleges ciklusidőt az MQTT QoS 1 visszaigazolásai, a gép teljesítménye, az operációs rendszer és az adatbázis-feldolgozás is korlátozza. A 20 másodperces célértéket minden ciklusnál továbbra is ténylegesen mérjük. Az automata az MQTT-broker visszaigazolásai után a monitor adatbázisában is megvárja a karosszéria végleges minősítését. Ha a monitor 30 másodpercen belül nem véglegesít, a gyártási folyamat leállítja a további küldést, és hibát naplóz ahelyett, hogy korlátlanul felhalmozná az eseményeket.
 
 ## Kijelentkezés, Excel-értékelés és teljes napló
 
 A dashboard jobb felső **Kijelentkezés + Excel** gombja dátum- és időbélyeggel ellátott XLSX-jelentést készít a `logs/exports` mappába, és letölthetővé teszi a böngészőben. Az export létrehozása **nem függ attól, hogy az automatika magától leáll-e**: a program először elmenti az aktuális állapotot, majd megkísérli a gyártási szál rendezett leállítását, és frissíti a munkafüzetet, ha újabb adatok érkeztek.
+
+Ha valamelyik adatlapon túllépné az Excel 1 048 576 soros korlátját, a jelentés több számozott munkalapra bontja az adatokat, és egyetlen sort sem hagy ki.
 
 A jelentés munkalapjai többek között:
 - `Összesítő`: darabszámok, megfelelési és selejtarány, ciklusidők, hibák és utómunka.
@@ -111,4 +113,4 @@ Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉ�
 
     python -m unittest discover -s tests -v
 
-A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést és a teljes Excel-exportot.
+A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést, a monitor véglegesítésére várást, a teljes Excel-exportot és a nagy munkalapok biztonságos darabolását.
