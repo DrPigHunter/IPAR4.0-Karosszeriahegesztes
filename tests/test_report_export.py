@@ -54,7 +54,7 @@ class ReportExportTests(unittest.TestCase):
         )
 
         self.assertTrue(path.is_file())
-        self.assertEqual(path.name, "BODYLINE_jelentes_2026-10-17_18-40-20.xlsx")
+        self.assertEqual(path.name, "BODYLINE_jelentes_2026-10-17_18-40-20_000000.xlsx")
         self.assertEqual(path.read_bytes(), data)
         self.assertEqual(info["session_body_count"], 1)
         self.assertEqual(info["session_pass_count"], 1)
@@ -85,6 +85,30 @@ class ReportExportTests(unittest.TestCase):
         run_logs = pd.read_excel(BytesIO(data), sheet_name="Futásnaplók")
         self.assertIn("body_id", run_logs.columns)
         workbook.close()
+
+    def test_two_exports_with_same_second_keep_distinct_files(self):
+        timestamp = datetime(2026, 10, 17, 18, 42, 0, tzinfo=timezone.utc)
+        first_path, _, _ = export_production_report(
+            session_started_at=time.time(),
+            fault_rate_percent=0.0,
+            fault_mode="within_limits",
+            automatic_worker_stopped=True,
+            db_path=self.db_path,
+            log_dir=self.log_dir,
+            export_timestamp=timestamp,
+        )
+        second_path, _, _ = export_production_report(
+            session_started_at=time.time(),
+            fault_rate_percent=0.0,
+            fault_mode="within_limits",
+            automatic_worker_stopped=True,
+            db_path=self.db_path,
+            log_dir=self.log_dir,
+            export_timestamp=timestamp.replace(microsecond=1),
+        )
+        self.assertNotEqual(first_path, second_path)
+        self.assertTrue(first_path.exists())
+        self.assertTrue(second_path.exists())
 
     def test_export_is_created_even_when_database_does_not_exist(self):
         missing_db = self.root / "not-created-yet.db"
