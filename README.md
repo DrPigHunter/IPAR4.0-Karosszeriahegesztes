@@ -16,7 +16,7 @@ Ipar 4.0 oktatási demonstráció: tíz járműmodell bal oldalfalának ponthege
 
 A webes felület címe: **http://localhost:8501**
 
-A monitor és a dashboard két külön PowerShell-ablakban fut; hagyd nyitva ezeket a szimuláció közben. Az automatika a kezelőfelület megnyitásakor **leállított állapotban** van: a hibaarány és a sebesség beállítása után az **Élő gyártás** fülön kézzel kell elindítani. 100%-os sebességnél a pontküldések közötti alapvárakozás 90 ms, a karosszériák között 10 másodperc. A kezelőfelületen a sebesség 100–10 000% között állítható, és az új érték a következő karosszériaciklustól érvényes. A rendszer véletlenszerűen választja ki a tíz katalógusmodell egyikét. A 20 másodperces cikluscél mérendő elvárás, nem garantált teljesítmény.
+A monitor és a dashboard két külön PowerShell-ablakban fut; hagyd nyitva ezeket a szimuláció közben. Az automatika a kezelőfelület megnyitásakor **leállított állapotban** van, és az **Élő gyártás** fülön kézzel kell elindítani. A kezelőfelületen kizárólag a szimuláció sebessége állítható; a folyamatparaméterek gyári alapértékeit a `src/factory_settings.py` rögzíti. 100%-os sebességnél a pontküldések közötti alapvárakozás 90 ms, a karosszériák között 10 másodperc. A sebesség 100–10 000% között állítható, az új érték a következő karosszériaciklustól érvényes. A rendszer véletlenszerűen választja ki a tíz katalógusmodell egyikét. A 20 másodperces cikluscél mérendő elvárás, nem garantált teljesítmény.
 
 ## Kézi indítás
 
@@ -46,11 +46,10 @@ Ezután nyisd meg a http://localhost:8501 címet. Az automatika nem indul el mag
 ## Háromfüles felület
 
 - **Élő gyártás:** aktuális karosszéria, pontteljesség és színkódolt ponttérkép, indítás/leállítás és sebességszabályzó 100–10 000% között.
-- **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, hibaarány és hibamód beállítása, karosszéria-előzmények, mérési napló és utómunka-kezelés.
+- **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények, mérési napló és utómunka-kezelés. A folyamatparaméterek nem módosíthatók a felületen.
 - **Napló és export:** tartós futás- és alkalmazásnaplók, monitor/dashboard konzolnaplók, dátumozott Excel-jelentés és letöltés.
 - **Automatizálás:** a 10 modellből a rendszer automatikusan választ, de a gyártási ciklus csak a felhasználó indításával kezdődik. A ciklusidő célértéke 20 másodperc alatt; az eredményt minden lezárt ciklusnál mérjük.
-- **Pontonkénti eltérésvalószínűség:** a Statisztika és utómunka fülön 0,000–0,100% között állítható, 0,001 százalékpontos lépésekkel. A 0,000% kikapcsol minden mesterséges eltérést.
-- **Eltérési mód:** választható elfogadott tartományon belüli változtatás (megfelelő marad), vagy a határértéket egy mérési lépéssel átlépő hiba (utómunka).
+- **Folyamatparaméterek:** a mesterséges hibainjektálás alapértéke 0%, a kopásmodell, önkorrekció, hűtés és automatikus hegesztőfej-/elektródaegység-csere kódalapú gyári beállítással működik. A módosításokat kizárólag a `src/factory_settings.py` fájlban kell elvégezni.
 - **Utómunka:** a ténylegesen hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont hibának számít, és automatikusan utómunka-sorba kerül.
 - **Statisztika:** az aktuális dashboard-folyamat új futásait külön számolja; a korábbi futások megmaradnak az előzményekben, így régi selejtek nem torzítják az új menet mérőszámait.
 
@@ -111,9 +110,9 @@ Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉ�
 
 ## Elektródakopás, hűtés, önkorrekció és eszközcsere
 
-A külön fejlesztési ág kopási indexet, (I^2 t) alapú szintetikus hőbeviteli közelítést és határértékek közötti önkorrekciót modellez. A Statisztika és utómunka fülön beállítható a kopási ütem, a hűtővíz-áramlás és a belépő/kilépő hőmérséklet, valamint az automatikus eszközcsere.
+A fejlesztési ág kopási indexet, (I^2 t) alapú szintetikus hőbeviteli közelítést és határértékek közötti önkorrekciót modellez. A kopási, hűtési, önkorrekciós és hegesztőfej-/elektródaegység-csere-paraméterek a `src/factory_settings.py` fájlban rögzítettek; a kezelőfelületen ezek nem állíthatók.
 
-Az elektródakopás a karosszériaciklusok között is megmarad, és a `data/equipment_state.json` fájlban újraindítás után is folytatódik. A csereintervallum **lezárt baloldalfal-ciklusban** állítható. Az alapértelmezett 100 ciklus nagyjából 14 000 pontot jelent, ha egy oldalfalon kb. 140 pont szerepel; ez nagyságrendileg összevethető a CORDIS SmartDress 10 000–30 000 pontos fejlesztési céljával, de nem univerzális élettartam-előírás. Az intervallum elérése után az eszközcsere a következő ciklusok közötti szünetben történik: a régi eszköz állapota naplózódik, majd az új eszköz kopása 0%-ról indul. A szimulált csereidő a normál szünetből fogy; hosszabb csere esetén a leállás is hosszabb. Automatikus csere kikapcsolásakor a gyártás biztonságosan megáll, és kézi eszközcserét kér.
+Az elektródakopás a karosszériaciklusok között is megmarad, és a `data/equipment_state.json` fájlban újraindítás után is folytatódik. A kódalapú beállítás 100 lezárt bal oldalfal után indít egy **szimulált műszakszüneti karbantartási pontot** (kb. 14 000 hegesztési pont 140 pont/oldalfal mellett). Az intervallum elérése után a hegesztőfej/elektródaegység cseréje a következő karosszériák közötti állásidőben történik; a régi egység állapota naplózódik, majd az új egység kopása 0%-ról indul. A csere a rendelkezésre álló szünetből fogyaszt időt; hosszabb csere esetén az állásidő is hosszabb. Ez a szimuláció ciklusszám alapján közelíti a karbantartási szünetet, nem modellez konkrét vállalati műszak- vagy pihenőidő-naptárt.
 
 Az Excel-export külön `Kopás és önkorrekció`, `Eszközcsere-napló`, `Paraméter-audit` és `Források` munkalapokat tartalmazza, így a felhasznált hűtési referenciaértékek és az egyedi tanulmányokra vonatkozó korlátozások a jelentésben is visszakereshetők.
 
