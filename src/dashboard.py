@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -28,6 +29,7 @@ from src.monitor import (
     REWORK_IN_PROGRESS, REWORK_WAITING, TOPIC,
 )
 from src import simulator as simulator_module
+from src.report_export import append_application_log, export_production_report, load_all_tables, load_file_logs
 
 BETWEEN_BODIES_PAUSE_SECONDS = 10.0
 PUBLISH_DELAY_MS = 90  # milliseconds per weld result; 142 points take about 13 seconds
@@ -278,6 +280,197 @@ def start_automatic_production() -> None:
     st.session_state["auto_state"] = state
     st.session_state["auto_thread"] = worker
     worker.start()
+    safe_application_log("automatic_production_started", {
+        "fault_rate_percent": round(float(state["fault_rate"]) * 100.0, 3),
+        "fault_mode": state["fault_mode"],
+    })
+
+
+def safe_application_log(event: str, details: dict[str, Any] | None = None, level: str = "INFO") -> None:
+    """Best-effort disk-backed app log; a logging issue must not block export."""
+    try:
+        append_application_log(event, details, log_dir=ROOT / "logs", level=level)
+    except Exception as exc:
+        print(f"Alkalmazásnapló nem írható ({event}): {exc}")
+
+
+def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
+    """Persist an Excel snapshot first, independent of whether the production worker stops."""
+    state = st.session_state.get("auto_state", {})
+    stop_event = st.session_state.get("auto_stop_event")
+    worker = st.session_state.get("auto_thread")
+    fault_rate_percent = float(state.get("fault_rate", DEFAULT_FAULT_RATE)) * 100.0
+    fault_mode = str(state.get("fault_mode", "within_limits"))
+    session_started_at = st.session_state.get("app_session_started_at")
+    export_time = datetime.now().astimezone().replace(microsecond=0)
+
+    if stop_automatic:
+        safe_application_log("logout_requested", {
+            "fault_rate_percent": fault_rate_percent,
+            "fault_mode": fault_mode,
+            "worker_was_alive": bool(worker is not None and worker.is_alive()),
+        })
+        if stop_event is not None:
+            stop_event.set()
+        state["running"] = False
+
+    # Write the first dated workbook immediately. This is not conditional on the
+    # automation thread shutting down, so even a stuck worker cannot block the export.
+    worker_stopped = worker is None or not worker.is_alive()
+    path, data, summary = export_production_report(
+        session_started_at=session_started_at,
+        fault_rate_percent=fault_rate_percent,
+        fault_mode=fault_mode,
+        automatic_worker_stopped=worker_stopped,
+        db_path=DB_PATH,
+        log_dir=ROOT / "logs",
+        export_timestamp=export_time,
+    )
+    safe_application_log("excel_report_created", {
+        "file": str(path),
+        "snapshot": "Első mentés; nem vár az automatikus leállásra.",
+        "session_body_count": summary.get("session_body_count", 0),
+        "session_completed_count": summary.get("session_completed_count", 0),
+        "session_scrap_count": summary.get("session_scrap_count", 0),
+    })
+
+    if stop_automatic and worker is not None and worker.is_alive():
+        # Normal cycles finish in about 13 seconds. Timeout does not cancel the export.
+        worker.join(timeout=20.0)
+    worker_stopped = worker is None or not worker.is_alive()
+    safe_application_log(
+        "logout_export_finalized" if stop_automatic else "excel_export_prepared",
+        {
+            "file": str(path),
+            "automatic_worker_stopped": worker_stopped,
+            "export_remains_valid_if_worker_continues": True,
+        },
+    )
+
+    # Refresh the same timestamped workbook with rows written while the worker stopped.
+    # If this second pass fails, the first successfully written workbook stays available.
+    try:
+        final_path, final_data, final_summary = export_production_report(
+            session_started_at=session_started_at,
+            fault_rate_percent=fault_rate_percent,
+            fault_mode=fault_mode,
+            automatic_worker_stopped=worker_stopped,
+            db_path=DB_PATH,
+            log_dir=ROOT / "logs",
+            export_timestamp=export_time,
+        )
+        path, data, summary = final_path, final_data, final_summary
+    except Exception as exc:
+        safe_application_log("excel_report_refresh_failed", {
+            "file": str(path), "error": str(exc),
+            "note": "The first successfully written Excel snapshot is retained.",
+        }, level="WARNING")
+
+    safe_application_log("excel_report_ready", {
+        "file": str(path),
+        "automatic_worker_stopped": worker_stopped,
+        "all_database_rows_included": True,
+    })
+    return {
+        "path": str(path),
+        "filename": path.name,
+        "data": data,
+        "summary": summary,
+        "automatic_worker_stopped": worker_stopped,
+        "created_at": export_time.isoformat(timespec="seconds"),
+    }
+
+
+def render_complete_log_tab() -> None:
+    """Display every persisted record and every log file, not only recent dashboard rows."""
+    st.markdown("## Teljes napló és export")
+    st.caption(
+        "A hegesztési események, karosszériák, utómunka-műveletek és rendszerhibák SQLite-adatbázisba "
+        "kerülnek. A futás- és alkalmazásnaplók fájlba íródnak, így egy váratlan bezárás után is megmaradnak."
+    )
+    if st.button("⬇  Teljes Excel-jelentés készítése", key="manual_excel_export", type="primary"):
+        try:
+            report = make_excel_export(stop_automatic=False)
+            st.session_state["latest_report"] = report
+            safe_application_log("excel_export_download_available", {"file": report["path"]})
+            st.success(f"Az Excel-jelentés elmentve: {report['filename']}")
+        except Exception as exc:
+            st.error(f"Az Excel-jelentés nem készült el: {exc}")
+
+    latest_report = st.session_state.get("latest_report")
+    if latest_report:
+        st.download_button(
+            "Excel-jelentés letöltése",
+            data=latest_report["data"],
+            file_name=latest_report["filename"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_latest_excel_report",
+            use_container_width=True,
+        )
+        summary = latest_report.get("summary", {})
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Munkamenet oldalfalai", int(summary.get("session_body_count", 0)))
+        s2.metric("Lezárt oldalfalak", int(summary.get("session_completed_count", 0)))
+        s3.metric("Megfelelt", int(summary.get("session_pass_count", 0)))
+        s4.metric("Selejtes", int(summary.get("session_scrap_count", 0)))
+
+    try:
+        tables = load_all_tables(DB_PATH)
+        file_logs = load_file_logs(ROOT / "logs")
+    except Exception as exc:
+        st.error(f"A naplók beolvasása közben hiba történt: {exc}")
+        return
+
+    bodies, weld_events = tables["bodies"], tables["weld_events"]
+    rework, actions, errors = tables["rework_queue"], tables["rework_actions"], tables["system_errors"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Mentett karosszéria", len(bodies))
+    c2.metric("Mentett hegesztési esemény", len(weld_events))
+    c3.metric("Utómunka-művelet", len(actions))
+    c4.metric("Rendszerhiba-bejegyzés", len(errors))
+    st.caption(f"Adatbázis: {DB_PATH} · Excel-exportok: {ROOT / 'logs' / 'exports'}")
+
+    with st.expander(f"Karosszéria-rekordok ({len(bodies)})", expanded=False):
+        st.dataframe(bodies, use_container_width=True, hide_index=True, height=320)
+    with st.expander(f"Összes hegesztési pont-esemény ({len(weld_events)})", expanded=False):
+        st.dataframe(weld_events, use_container_width=True, hide_index=True, height=360)
+    with st.expander(f"Összes utómunka-bejegyzés ({len(rework)})", expanded=False):
+        st.dataframe(rework, use_container_width=True, hide_index=True, height=280)
+    with st.expander(f"Összes utómunka-művelet ({len(actions)})", expanded=False):
+        st.dataframe(actions, use_container_width=True, hide_index=True, height=280)
+    with st.expander(f"Összes rendszerhiba ({len(errors)})", expanded=False):
+        st.dataframe(errors, use_container_width=True, hide_index=True, height=280)
+    with st.expander(f"Karosszériánkénti JSON-naplók ({len(file_logs['run_json'])})", expanded=False):
+        if file_logs["run_json"].empty:
+            st.info("Még nincs per-karosszéria JSON-napló.")
+        else:
+            st.dataframe(file_logs["run_json"], use_container_width=True, hide_index=True, height=320)
+    with st.expander(f"Napi JSONL gyártási napló ({len(file_logs['daily_jsonl'])})", expanded=False):
+        if file_logs["daily_jsonl"].empty:
+            st.info("Még nincs napi JSONL-napló.")
+        else:
+            st.dataframe(file_logs["daily_jsonl"], use_container_width=True, hide_index=True, height=320)
+    with st.expander(f"Alkalmazás- és kezelői napló ({len(file_logs['application_log'])})", expanded=False):
+        if file_logs["application_log"].empty:
+            st.info("Még nincs alkalmazásnapló-bejegyzés.")
+        else:
+            st.dataframe(file_logs["application_log"], use_container_width=True, hide_index=True, height=320)
+
+    export_dir = ROOT / "logs" / "exports"
+    export_files = []
+    if export_dir.exists():
+        for item in sorted(export_dir.glob("*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True):
+            export_files.append({
+                "Fájlnév": item.name,
+                "Méret (KB)": round(item.stat().st_size / 1024, 1),
+                "Utoljára mentve": datetime.fromtimestamp(item.stat().st_mtime).astimezone().isoformat(timespec="seconds"),
+                "Elérési út": str(item),
+            })
+    with st.expander(f"Korábbi Excel-exportok ({len(export_files)})", expanded=False):
+        if export_files:
+            st.dataframe(pd.DataFrame(export_files), use_container_width=True, hide_index=True)
+        else:
+            st.info("Még nincs mentett Excel-export.")
 
 
 def render_spot_grid(config: dict[str, Any], body_events: pd.DataFrame, completed: bool) -> tuple[int, int, int, int]:
