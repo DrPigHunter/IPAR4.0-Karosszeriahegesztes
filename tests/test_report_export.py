@@ -88,7 +88,7 @@ class ReportExportTests(unittest.TestCase):
             "Összesítő", "Modellenként", "Karosszériák", "Hegesztési adatok",
             "Utómunka sor", "Utómunka műveletek", "Rendszerhibák",
             "Futásnaplók", "Napi JSONL", "Összesített JSON", "Alkalmazás-napló",
-            "Konzolnapló", "Beállítások", "Kopás és önkorrekció", "Eszközcsere-napló", "Paraméter-audit",
+            "Konzolnapló", "Beállítások", "Kopás és önkorrekció", "Eszközcsere-napló", "Paraméter-audit", "Források",
         }
         self.assertTrue(required_sheets.issubset(set(workbook.sheetnames)))
         self.assertEqual(workbook["Karosszériák"].max_row, 2)
