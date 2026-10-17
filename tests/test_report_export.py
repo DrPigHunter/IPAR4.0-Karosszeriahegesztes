@@ -63,7 +63,8 @@ class ReportExportTests(unittest.TestCase):
         required_sheets = {
             "Összesítő", "Modellenként", "Karosszériák", "Hegesztési adatok",
             "Utómunka sor", "Utómunka műveletek", "Rendszerhibák",
-            "Futásnaplók", "Napi JSONL", "Alkalmazás-napló", "Beállítások",
+            "Futásnaplók", "Napi JSONL", "Összesített JSON", "Alkalmazás-napló",
+            "Konzolnapló", "Beállítások",
         }
         self.assertTrue(required_sheets.issubset(set(workbook.sheetnames)))
         self.assertEqual(workbook["Karosszériák"].max_row, 2)
