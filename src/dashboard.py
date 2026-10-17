@@ -363,7 +363,7 @@ def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
     fault_mode = str(state.get("fault_mode", "within_limits"))
     speed_percent = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
     session_started_at = st.session_state.get("app_session_started_at")
-    export_time = datetime.now().astimezone().replace(microsecond=0)
+    export_time = datetime.now().astimezone()
 
     if stop_automatic:
         safe_application_log("logout_requested", {
