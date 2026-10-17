@@ -714,14 +714,12 @@ def render_wear_controls() -> None:
         st.caption("Önkorrekció nélkül a szintetikus minőségi cél alatti pontokat a monitor utómunkára küldi.")
 
 def start_automatic_production() -> None:
-    """Start production only after the operator presses the start button."""
+    """Start production only after explicit operator action and tool-life checks."""
     old_thread = st.session_state.get("auto_thread")
     old_stop = st.session_state.get("auto_stop_event")
     if old_thread is not None and old_thread.is_alive():
         if old_stop is None or not old_stop.is_set():
             return
-        # A stop request cannot interrupt a sidewall that is already being published.
-        # Wait for that cycle to finish so a second worker cannot duplicate production.
         old_thread.join(timeout=30.0)
         if old_thread.is_alive():
             state = st.session_state.get("auto_state", {})
@@ -733,37 +731,68 @@ def start_automatic_production() -> None:
         state = {
             "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
             "fault_mode": "within_limits", "speed_percent": DEFAULT_SPEED_PERCENT,
-            "wear_enabled": True, "wear_per_point_percent": 0.03, "auto_correct_wear": True,
-            "auto_tool_change_enabled": True, "tool_change_interval_bodies": DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+            "wear_enabled": True, "wear_per_point_percent": DEFAULT_WEAR_PER_POINT_PERCENT,
+            "auto_correct_wear": True, "auto_tool_change_enabled": True,
+            "tool_change_interval_bodies": DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+            "tool_change_duration_seconds": DEFAULT_TOOL_CHANGE_DURATION_SECONDS,
+            "coolant_flow_l_min": COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+            "coolant_inlet_temp_c": COOLANT_INLET_TARGET_MAX_C,
+            "coolant_outlet_temp_c": COOLANT_OUTLET_TARGET_MAX_C,
             "wear_state": {},
             "session_started_at": st.session_state.get("app_session_started_at", time.time()),
             "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
             "error": None,
         }
-    # Preserve the operator's choices made on the statistics tab; starting must not
-    # reset the probability or selected variation mode back to the defaults.
-    state["running"] = True
+
+    # Keep choices and life counters between cycles and across dashboard restarts.
     state["fault_rate"] = float(state.get("fault_rate", DEFAULT_FAULT_RATE))
     state["fault_mode"] = str(state.get("fault_mode", "within_limits"))
     state.setdefault("wear_enabled", True)
-    state.setdefault("wear_per_point_percent", 0.03)
+    state.setdefault("wear_per_point_percent", DEFAULT_WEAR_PER_POINT_PERCENT)
     state.setdefault("auto_correct_wear", True)
     state.setdefault("auto_tool_change_enabled", True)
     state.setdefault("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES)
+    state.setdefault("tool_change_duration_seconds", DEFAULT_TOOL_CHANGE_DURATION_SECONDS)
+    state.setdefault("coolant_flow_l_min", COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN)
+    state.setdefault("coolant_inlet_temp_c", COOLANT_INLET_TARGET_MAX_C)
+    state.setdefault("coolant_outlet_temp_c", COOLANT_OUTLET_TARGET_MAX_C)
     state["wear_state"] = ensure_wear_state(state.setdefault("wear_state", {}))
-    state["speed_percent"] = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
+    state["speed_percent"] = normalize_speed_percent(
+        state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT))
+    )
     state.setdefault("completed_cycles", 0)
     state.setdefault("session_started_at", st.session_state.get("app_session_started_at", time.time()))
-    state.setdefault("body_id", "")
-    state.setdefault("config_id", "")
-    state.setdefault("last_started_at", "")
-    state.setdefault("last_sent_body_id", "")
+    for key in ("body_id", "config_id", "last_started_at", "last_sent_body_id"):
+        state.setdefault(key, "")
+
+    wear_state = state["wear_state"]
+    tool_interval_reached = int(wear_state.get("bodies_since_tool_change", 0)) >= int(
+        state["tool_change_interval_bodies"]
+    )
+    if (
+        not bool(state["auto_tool_change_enabled"])
+        and (bool(wear_state.get("tool_change_pending")) or tool_interval_reached)
+    ):
+        state["running"] = False
+        state["tool_change_required"] = True
+        safe_application_log("automatic_production_start_blocked_tool_change_required", {
+            "current_tool_number": wear_state.get("current_tool_number", 1),
+            "bodies_since_tool_change": wear_state.get("bodies_since_tool_change", 0),
+            "replacement_interval_bodies": state["tool_change_interval_bodies"],
+        }, level="WARNING")
+        return
+
+    state["running"] = True
+    state["tool_change_required"] = False
     state["error"] = None
+    persist_equipment_state(state)
 
     stop_event = threading.Event()
     worker = threading.Thread(
-        target=automatic_production_worker, args=(stop_event, state, list(CONFIG_BY_ID)),
-        name="automatic-welding-production", daemon=True,
+        target=automatic_production_worker,
+        args=(stop_event, state, list(CONFIG_BY_ID)),
+        name="automatic-welding-production",
+        daemon=True,
     )
     st.session_state["auto_stop_event"] = stop_event
     st.session_state["auto_state"] = state
@@ -778,10 +807,18 @@ def start_automatic_production() -> None:
         "auto_correct_wear": state["auto_correct_wear"],
         "auto_tool_change_enabled": state["auto_tool_change_enabled"],
         "tool_change_interval_bodies": state["tool_change_interval_bodies"],
+        "tool_change_duration_seconds": state["tool_change_duration_seconds"],
+        "coolant_flow_l_min": state["coolant_flow_l_min"],
+        "coolant_inlet_temp_c": state["coolant_inlet_temp_c"],
+        "coolant_outlet_temp_c": state["coolant_outlet_temp_c"],
         "current_tool_number": state["wear_state"].get("current_tool_number", 1),
         "wear_percent_at_start": state["wear_state"].get("wear_percent", 0.0),
-        "effective_publish_delay_ms": round(scaled_publish_delay_ms(PUBLISH_DELAY_MS, state["speed_percent"]), 4),
-        "effective_inter_body_pause_seconds": round(scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, state["speed_percent"]), 4),
+        "effective_publish_delay_ms": round(
+            scaled_publish_delay_ms(PUBLISH_DELAY_MS, state["speed_percent"]), 4
+        ),
+        "effective_inter_body_pause_seconds": round(
+            scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, state["speed_percent"]), 4
+        ),
     })
 
 
@@ -1065,18 +1102,34 @@ if st.session_state.get("app_process_id") != os.getpid():
     st.session_state.pop("auto_thread", None)
     st.session_state.pop("auto_stop_event", None)
 if "auto_state" not in st.session_state:
-    # Start in a genuinely idle state: the operator sets fault controls first,
-    # then explicitly starts the automatic production from the live tab.
-    st.session_state["auto_state"] = {
+    # A UI restart must not give the currently installed electrode a fresh lifetime.
+    # Load the durable equipment state; production itself always starts stopped.
+    persisted_equipment = load_equipment_state()
+    initial_state: dict[str, Any] = {
         "running": False, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
         "fault_mode": "within_limits", "speed_percent": DEFAULT_SPEED_PERCENT,
-        "wear_enabled": True, "wear_per_point_percent": 0.03, "auto_correct_wear": True,
-        "auto_tool_change_enabled": True, "tool_change_interval_bodies": DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+        "wear_enabled": True, "wear_per_point_percent": DEFAULT_WEAR_PER_POINT_PERCENT,
+        "auto_correct_wear": True,
+        "auto_tool_change_enabled": True,
+        "tool_change_interval_bodies": DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+        "tool_change_duration_seconds": DEFAULT_TOOL_CHANGE_DURATION_SECONDS,
+        "coolant_flow_l_min": COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+        "coolant_inlet_temp_c": COOLANT_INLET_TARGET_MAX_C,
+        "coolant_outlet_temp_c": COOLANT_OUTLET_TARGET_MAX_C,
         "wear_state": {},
         "session_started_at": st.session_state.get("app_session_started_at", time.time()),
         "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
+        "tool_change_required": False,
         "error": None,
     }
+    initial_state.update(persisted_equipment)
+    initial_state["wear_state"] = ensure_wear_state(initial_state.get("wear_state", {}))
+    initial_state["running"] = False
+    initial_state["tool_change_required"] = bool(
+        initial_state["wear_state"].get("tool_change_pending")
+        and not initial_state.get("auto_tool_change_enabled", True)
+    )
+    st.session_state["auto_state"] = initial_state
     st.session_state["auto_stop_event"] = threading.Event()
 st.session_state.setdefault("speed_percent_input", DEFAULT_SPEED_PERCENT)
 
