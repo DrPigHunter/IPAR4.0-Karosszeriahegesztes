@@ -78,6 +78,23 @@ Minden lezárt karosszériaciklusról a monitor külön JSON-fájlt ment a `logs
 
 Az összesítő adatbázisból számol, így tartalmazhat korábbi verziókból származó futásokat is. A dashboard fő statisztikái az aktuális böngésző-munkamenet új ciklusait külön számolják, a korábbi futások pedig az előzményekben maradnak.
 
+## Kijelentkezés, Excel-értékelés és teljes napló
+
+A dashboard jobb felső **Kijelentkezés + Excel** gombja dátum- és időbélyeggel ellátott XLSX-jelentést készít a `logs/exports` mappába, és letölthetővé teszi a böngészőben. Az export létrehozása **nem függ attól, hogy az automatika magától leáll-e**: a program először elmenti az aktuális állapotot, majd megkísérli a gyártási szál rendezett leállítását, és frissíti a munkafüzetet, ha újabb adatok érkeztek.
+
+A jelentés munkalapjai többek között:
+- `Összesítő`: darabszámok, megfelelési és selejtarány, ciklusidők, hibák és utómunka.
+- `Modellenként`: modellenkénti minőségi eredmények és időadatok.
+- `Karosszériák` és `Hegesztési adatok`: **az összes elérhető SQLite-rekord**, nem csupán a képernyőn látható sorok.
+- `Utómunka sor`, `Utómunka műveletek`, `Rendszerhibák`: utómunka- és hibabejegyzések.
+- `Futásnaplók`, `Napi JSONL`, `Alkalmazás-napló`: per-karosszéria és operátori/programnaplók.
+- `Beállítások`: a jelentéskészítéskor kiválasztott hibaarány és hibamód.
+
+A **Napló és export** fül az adatbázis összes karosszéria-, hegesztési pont-, utómunka- és rendszerhiba-bejegyzését, a JSON/JSONL naplókat és a már mentett Excel-exportok listáját jeleníti meg. A gombnyomások és az indítási/leállítási kérések napi alkalmazásnaplóba íródnak, azonnali fájlflush-sel. A mérési adatok SQLite-ban, a lezárt ciklusok JSON/JSONL-fájlokban folyamatosan megmaradnak akkor is, ha a kezelőfelület váratlanul bezáródik.
+
+Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉÉÉ-HH-NN_ÓÓ-PP-MP.xlsx`.
+
+
 ## Tesztek futtatása
 
     python -m unittest discover -s tests -v
