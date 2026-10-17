@@ -138,11 +138,10 @@ def json_list(value: Any) -> list[str]:
 def automatic_production_worker(
     stop_event: threading.Event, state: dict[str, Any], config_ids: list[str]
 ) -> None:
-    """Publish a new, randomly selected model sidewall every five seconds."""
+    """Publish a randomly selected sidewall, then wait 10 seconds between bodies."""
     state["running"] = True
     previous_config = ""
     while not stop_event.is_set():
-        cycle_started = time.monotonic()
         options = [value for value in config_ids if value != previous_config] or config_ids
         config_id = random.choice(options)
         previous_config = config_id
@@ -164,6 +163,17 @@ def automatic_production_worker(
     state["running"] = False
 
 
+def session_bodies_only(bodies: pd.DataFrame) -> pd.DataFrame:
+    """Keep KPIs scoped to this browser session so old failed runs do not skew the new rate."""
+    if bodies.empty or "started_at" not in bodies:
+        return bodies.copy()
+    started_at = pd.to_datetime(bodies["started_at"], utc=True, errors="coerce")
+    session_start = pd.to_datetime(
+        st.session_state.get("app_session_started_at", time.time()), unit="s", utc=True
+    )
+    return bodies.loc[started_at >= session_start - pd.Timedelta(seconds=2)].copy()
+
+
 def start_automatic_production() -> None:
     """Start the cycle worker once per Streamlit session."""
     old_thread = st.session_state.get("auto_thread")
@@ -175,6 +185,7 @@ def start_automatic_production() -> None:
     stop_event = threading.Event()
     state = {
         "running": True, "completed_cycles": 0, "fault_rate": DEFAULT_FAULT_RATE,
+        "session_started_at": st.session_state.get("app_session_started_at", time.time()),
         "body_id": "", "config_id": "", "last_started_at": "", "last_sent_body_id": "",
         "error": None,
     }
@@ -250,7 +261,10 @@ production_tab, statistics_tab = st.tabs(["◉  Élő gyártás", "▦  Statiszt
 
 @st.fragment(run_every="1s")
 def render_production_tab() -> None:
-    bodies, events, rework, errors, actions = read_tables()
+    all_bodies, events, all_rework, errors, actions = read_tables()
+    bodies = session_bodies_only(all_bodies)
+    session_ids = set(bodies["body_id"].astype(str)) if not bodies.empty else set()
+    rework = all_rework[all_rework["body_id"].astype(str).isin(session_ids)].copy() if not all_rework.empty else all_rework
     auto_state = st.session_state["auto_state"]
     stop_event = st.session_state["auto_stop_event"]
     running = bool(auto_state.get("running")) and not stop_event.is_set()
@@ -364,8 +378,15 @@ def render_production_tab() -> None:
 
 @st.fragment(run_every="2s")
 def render_statistics_tab() -> None:
-    bodies, events, rework, errors, actions = read_tables()
+    all_bodies, all_events, all_rework, all_errors, all_actions = read_tables()
+    bodies = session_bodies_only(all_bodies)
+    session_ids = set(bodies["body_id"].astype(str)) if not bodies.empty else set()
+    events = all_events[all_events["body_id"].astype(str).isin(session_ids)].copy() if not all_events.empty else all_events
+    rework = all_rework[all_rework["body_id"].astype(str).isin(session_ids)].copy() if not all_rework.empty else all_rework
+    errors = all_errors
+    actions = all_actions[all_actions["body_id"].astype(str).isin(session_ids)].copy() if not all_actions.empty else all_actions
     st.markdown("## Minőségügyi áttekintés")
+    st.caption("A fő statisztika csak a mostani böngésző-munkamenetben indult oldalfalakat számolja; a korábbi futások az előzményekben maradnak.")
     if bodies.empty:
         st.info("Az adatbázis még nem kapott karosszéria-eseményt. Ellenőrizd a Docker MQTT-brokert és a python -m src.monitor folyamatot.")
         return
@@ -454,7 +475,7 @@ def render_statistics_tab() -> None:
             right.caption("Az utómunka lezárása nem írja át automatikusan a selejtes minősítést.")
 
     with st.expander("Karosszéria-előzmények", expanded=False):
-        history = bodies.copy()
+        history = all_bodies.copy()
         for source, label in [
             ("missing_ids_json", "Hiányzó pontok"),
             ("unexpected_ids_json", "Váratlan pontok"),
