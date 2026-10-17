@@ -480,10 +480,11 @@ def start_automatic_production() -> None:
     if old_thread is not None and old_thread.is_alive():
         if old_stop is None or not old_stop.is_set():
             return
-        old_thread.join(timeout=30.0)
+        # Never freeze the Streamlit UI while a previous worker is shutting down.
+        # The live tab refreshes every second and will enable Start once it exits.
         if old_thread.is_alive():
             state = st.session_state.get("auto_state", {})
-            state["error"] = "A korábbi gyártási ciklus még fut; várd meg a befejezését, majd indítsd újra."
+            state["error"] = "Az előző gyártási ciklus még leállás alatt van; próbáld újra néhány másodperc múlva."
             return
 
     state = st.session_state.get("auto_state")
@@ -578,8 +579,8 @@ def start_automatic_production() -> None:
         "coolant_outlet_temp_c": state["coolant_outlet_temp_c"],
         "current_tool_number": state["wear_state"].get("current_tool_number", 1),
         "wear_percent_at_start": state["wear_state"].get("wear_percent", 0.0),
-        "effective_publish_delay_ms": round(
-            scaled_publish_delay_ms(PUBLISH_DELAY_MS, state["speed_percent"]), 4
+        "nominal_cycle_target_seconds": round(
+            DEFAULT_TARGET_CYCLE_SECONDS * MIN_SPEED_PERCENT / state["speed_percent"], 3
         ),
         "effective_inter_body_pause_seconds": round(
             scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, state["speed_percent"]), 4
@@ -1036,19 +1037,24 @@ def render_production_tab() -> None:
             max_value=MAX_SPEED_PERCENT,
             step=100,
             key="speed_percent_input",
-            help="100% = jelenlegi sebesség (90 ms pontonként, 10 mp szünet). Legfeljebb 10 000%-ra emelhető.",
+            help="100%-nál egy bal oldalfal névleges ciklusa kb. 95 másodperc, a ciklusok között 10 másodperc szünettel. Legfeljebb 10 000%-ra emelhető.",
         ))
         previous_speed = auto_state.get("speed_percent", DEFAULT_SPEED_PERCENT)
         auto_state["speed_percent"] = speed_percent
         if int(previous_speed) != speed_percent:
             safe_application_log("simulation_speed_changed", {
                 "speed_percent": speed_percent,
-                "effective_publish_delay_ms": round(scaled_publish_delay_ms(PUBLISH_DELAY_MS, speed_percent), 4),
+                "nominal_cycle_target_seconds": round(
+                    DEFAULT_TARGET_CYCLE_SECONDS * MIN_SPEED_PERCENT / speed_percent, 3
+                ),
                 "effective_inter_body_pause_seconds": round(scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent), 4),
             })
-        effective_delay = scaled_publish_delay_ms(PUBLISH_DELAY_MS, speed_percent)
+        effective_cycle_target = DEFAULT_TARGET_CYCLE_SECONDS * MIN_SPEED_PERCENT / speed_percent
         effective_pause = scaled_inter_body_pause_seconds(BETWEEN_BODIES_PAUSE_SECONDS, speed_percent)
-        st.caption(f"{effective_delay:.3f} ms / pont · {effective_pause:.3f} mp szünet · a következő ciklustól érvényes")
+        st.caption(
+            f"{effective_cycle_target:.2f} mp/ciklus cél · {effective_pause:.3f} mp szünet · "
+            "a következő ciklustól érvényes"
+        )
     with head_right:
         if running:
             if st.button("Ⅱ  Automatika leállítása", key="stop_auto", use_container_width=True):
