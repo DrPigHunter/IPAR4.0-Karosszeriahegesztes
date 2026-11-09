@@ -8,6 +8,8 @@ $logDir = Join-Path $root "logs"
 $monitorLog = Join-Path $logDir "monitor.log"
 $monitorReadyFile = Join-Path $logDir "monitor.ready"
 $dashboardLog = Join-Path $logDir "dashboard.log"
+$dashboardScript = Join-Path $root "src\dashboard.py"
+$dashboardReadyFile = Join-Path $logDir "dashboard.ready"
 $dashboardUrl = "http://localhost:8501"
 $dashboardHealthUrl = "$dashboardUrl/_stcore/health"
 $dashboardPort = 8501
@@ -191,6 +193,34 @@ function Test-MonitorReadySignal {
     }
 }
 
+function Test-DashboardReadySignal {
+    param([string]$ReadyPath, [string]$ExpectedHash)
+    if (-not (Test-Path -LiteralPath $ReadyPath)) { return $false }
+    try {
+        $content = [System.IO.File]::ReadAllText($ReadyPath)
+        return $content.Contains("source_sha=$ExpectedHash")
+    } catch {
+        return $false
+    }
+}
+
+function Wait-ForDashboardReady {
+    param([string]$ReadyPath, [string]$ExpectedHash, [int]$TimeoutSeconds)
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $healthyChecks = 0
+    while ($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        if ((Test-DashboardHealth) -and (Test-DashboardReadySignal -ReadyPath $ReadyPath -ExpectedHash $ExpectedHash)) {
+            $healthyChecks++
+            if ($healthyChecks -ge 2) { return $true }
+        } else {
+            $healthyChecks = 0
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
+
 function Wait-ForMonitorReady {
     param([string]$ReadyPath, [int]$TimeoutSeconds)
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -279,15 +309,19 @@ try {
     }
     if (-not $brokerReady) { throw "A localhost:1883 MQTT-port 30 masodperc alatt nem valt elerhetove." }
 
-    # Reuse an already healthy instance; never open a second browser tab on rerun.
+    $dashboardSourceHash = (Get-FileHash -LiteralPath $dashboardScript -Algorithm SHA256).Hash.ToLowerInvariant()
+    $existingDashboardFound = $false
+
+    # Reuse only a dashboard that confirms it rendered the exact source currently on disk.
     $listenerPid = Get-ListenerOwner -Port $dashboardPort
     if ($null -ne $listenerPid) {
         $owner = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $listenerPid" -ErrorAction SilentlyContinue
         $ownerCommand = if ($null -ne $owner) { [string]$owner.CommandLine } else { "" }
         $sameProjectDashboard = ($ownerCommand.IndexOf($venvPython, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and ($ownerCommand -match 'streamlit\s+run') -and ($ownerCommand -match 'src[/\\]dashboard\.py')
         if (-not $sameProjectDashboard) { throw "A localhost:$dashboardPort portot masik folyamat hasznalja (PID: $listenerPid). Allitsd le azt az alkalmazast." }
+        $existingDashboardFound = $true
 
-        if (Test-DashboardHealth) {
+        if ((Test-DashboardHealth) -and (Test-DashboardReadySignal -ReadyPath $dashboardReadyFile -ExpectedHash $dashboardSourceHash)) {
             $snapshot = Get-ProcessSnapshot
             $monitorExists = $false
             foreach ($process in $snapshot) {
@@ -305,11 +339,16 @@ try {
                     throw "The monitor did not connect to the MQTT broker. Do not start production yet."
                 }
             }
-            Write-Host "A BODYLINE mar fut. Nem inditottam ujabb peldanyt es nem nyitottam uj bongeszoablakot." -ForegroundColor Green
+            Write-Host "The current BODYLINE dashboard and monitor are healthy. No duplicate service or browser tab was started." -ForegroundColor Green
             Write-Host "Dashboard: $dashboardUrl"
             return
         }
-        Write-Host "A korabbi BODYLINE-dashboard nem valaszol; ujrainditom..." -ForegroundColor Yellow
+
+        if (Test-DashboardHealth) {
+            Write-Host "The dashboard server responds, but it has not confirmed rendering the current source. Restarting the old UI..." -ForegroundColor Yellow
+        } else {
+            Write-Host "The previous BODYLINE dashboard is not responding; restarting it..." -ForegroundColor Yellow
+        }
     }
 
     Write-Host "Korabbi, ehhez a projekthez tartozo folyamatok ellenorzese..." -ForegroundColor Yellow
@@ -326,6 +365,7 @@ try {
 
     Write-Host "[4/5] Starting MQTT monitor and dashboard..." -ForegroundColor Yellow
     Remove-Item -LiteralPath $monitorReadyFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $dashboardReadyFile -Force -ErrorAction SilentlyContinue
     $monitorWindow = Start-BodylineServiceWindow -Service "monitor" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":monitor") -Helper $helperPath
     if (-not (Wait-ForMonitorReady -ReadyPath $monitorReadyFile -TimeoutSeconds 30)) {
         Show-LogTail -Path $monitorLog -Title "Monitor log"
@@ -334,24 +374,20 @@ try {
     Write-Host "Az MQTT-monitor csatlakozott." -ForegroundColor Green
 
     $dashboardWindow = Start-BodylineServiceWindow -Service "dashboard" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":dashboard") -Helper $helperPath
-    Write-Host "[5/5] A dashboard egeszsegi allapotanak ellenorzese..." -ForegroundColor Yellow
-    $dashboardReady = $false
-    $healthyChecks = 0
-    for ($i = 0; $i -lt 60; $i++) {
-        if (Test-DashboardHealth) {
-            $healthyChecks++
-            if ($healthyChecks -ge 2) { $dashboardReady = $true; break }
-        } else { $healthyChecks = 0 }
-        Start-Sleep -Seconds 1
-    }
+    Write-Host "[5/5] Waiting for the current dashboard source to render..." -ForegroundColor Yellow
+    $dashboardReady = Wait-ForDashboardReady -ReadyPath $dashboardReadyFile -ExpectedHash $dashboardSourceHash -TimeoutSeconds 60
     if (-not $dashboardReady) {
-        Show-LogTail -Path $dashboardLog -Title "Dashboard naplo"
-        throw "A dashboard 60 masodperc alatt nem valt egeszseges allapotuva. Nem nyitottam meg a bongeszot."
+        Show-LogTail -Path $dashboardLog -Title "Dashboard log"
+        throw "The dashboard did not render the current source and become healthy within 60 seconds. The browser was not opened."
     }
 
-    Write-Host "A dashboard egeszsegesen elerheto: $dashboardUrl" -ForegroundColor Green
-    Write-Host "A bongeszo megnyitasa egyszer..." -ForegroundColor Yellow
-    Start-Process -FilePath $dashboardUrl | Out-Null
+    Write-Host "The dashboard rendered successfully and is healthy: $dashboardUrl" -ForegroundColor Green
+    if (-not $existingDashboardFound) {
+        Write-Host "Opening the browser once..." -ForegroundColor Yellow
+        Start-Process -FilePath $dashboardUrl | Out-Null
+    } else {
+        Write-Host "The existing browser tab should reconnect to the restarted dashboard. Refresh it if it remains disconnected." -ForegroundColor Yellow
+    }
     Write-Host ""
     Write-Host "A BODYLINE elindult. A gyartas alapbol leallitott allapotban van; az automatikat az Elo gyartas fulon indithatod." -ForegroundColor Green
     Write-Host "A monitor es a dashboard ablakat hagyd nyitva. Naplok: $logDir"
