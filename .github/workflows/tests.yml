@@ -32,7 +32,8 @@ jobs:
           $errors = $null
           $files = @(
             (Join-Path $PWD "Start_HegesztesSzimulacio.ps1"),
-            (Join-Path $PWD "tools/Run-Bodyline-Service.ps1")
+            (Join-Path $PWD "tools/Run-Bodyline-Service.ps1"),
+            (Join-Path $PWD "tools/Stop-Bodyline.ps1")
           )
           foreach ($file in $files) {
             $tokens = $null
