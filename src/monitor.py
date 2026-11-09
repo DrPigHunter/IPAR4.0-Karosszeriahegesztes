@@ -410,13 +410,34 @@ def main() -> None:
                 print(f"System-error database logging failure: {db_exc}")
 
     client.on_connect, client.on_disconnect, client.on_message = on_connect, on_disconnect, on_message
-    while True:
+    shutdown_file = LOG_DIR / "shutdown.request"
+
+    try:
+        while not shutdown_file.exists():
+            try:
+                client.connect(BROKER_HOST, BROKER_PORT, keepalive=30)
+                client.loop_start()
+                print("MQTT monitor running. Waiting for production events or shutdown request.")
+                while not shutdown_file.exists():
+                    time.sleep(0.25)
+                break
+            except (OSError, mqtt.MQTTException) as exc:
+                if shutdown_file.exists():
+                    break
+                print(f"MQTT broker unavailable ({exc}); retrying in 3 seconds.")
+                time.sleep(3)
+    finally:
+        clear_monitor_ready()
         try:
-            client.connect(BROKER_HOST, BROKER_PORT, keepalive=30)
-            client.loop_forever(retry_first_connection=True)
-        except (OSError, mqtt.MQTTException) as exc:
-            print(f"MQTT broker unavailable ({exc}); retrying in 3 seconds.")
-            time.sleep(3)
+            client.disconnect()
+        except (OSError, mqtt.MQTTException):
+            pass
+        try:
+            client.loop_stop()
+        except (RuntimeError, mqtt.MQTTException):
+            pass
+        conn.close()
+        print("MQTT monitor stopped cleanly.")
 
 
 if __name__ == "__main__":
