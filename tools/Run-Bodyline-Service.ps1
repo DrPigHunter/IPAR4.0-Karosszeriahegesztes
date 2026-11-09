@@ -29,16 +29,35 @@ Write-Host ("Projekt: {0}" -f $ProjectRoot) -ForegroundColor DarkGray
 Write-Host ("Azonosito: {0}" -f $Marker) -ForegroundColor DarkGray
 Write-Host ""
 
-if ($Service -eq "monitor") {
-    $logPath = Join-Path $logDir "monitor.log"
-    & $python -u -m src.monitor 2>&1 | Tee-Object -FilePath $logPath -Append
-} else {
-    $logPath = Join-Path $logDir "dashboard.log"
-    # Streamlit is headless: only the parent launcher opens the browser.
-    & $python -u -m streamlit run --server.headless true --server.port 8501 src/dashboard.py 2>&1 | Tee-Object -FilePath $logPath -Append
+# Python and Uvicorn may write normal startup messages to stderr. PowerShell can
+# promote those records to terminating errors when ErrorActionPreference is Stop.
+# Keep the service console/log stream alive; the native process exit code is checked below.
+$previousErrorActionPreference = $ErrorActionPreference
+$nativePreferenceVariable = Get-Variable -Name "PSNativeCommandUseErrorActionPreference" -ErrorAction SilentlyContinue
+$hadNativePreferenceVariable = $null -ne $nativePreferenceVariable
+if ($hadNativePreferenceVariable) {
+    $previousNativePreference = [bool]$nativePreferenceVariable.Value
+    $PSNativeCommandUseErrorActionPreference = $false
 }
+$ErrorActionPreference = "Continue"
 
-$serviceExitCode = $LASTEXITCODE
+try {
+    if ($Service -eq "monitor") {
+        $logPath = Join-Path $logDir "monitor.log"
+        & $python -u -m src.monitor 2>&1 | Tee-Object -FilePath $logPath -Append
+    } else {
+        $logPath = Join-Path $logDir "dashboard.log"
+        # Streamlit is headless: only the parent launcher opens the browser.
+        & $python -u -m streamlit run --server.headless true --server.port 8501 src/dashboard.py 2>&1 | Tee-Object -FilePath $logPath -Append
+    }
+    $serviceExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    if ($hadNativePreferenceVariable) {
+        $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+    }
+}
 if ($serviceExitCode -ne 0) {
     Write-Host ""
     Write-Host ("A {0} szolgaltatas hibakoddal allt le: {1}" -f $Service, $serviceExitCode) -ForegroundColor Red
