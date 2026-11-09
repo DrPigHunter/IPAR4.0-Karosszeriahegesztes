@@ -343,6 +343,36 @@ def process_event(
     log_processing_error(conn, "ISMERETLEN ESEMÉNYTÍPUS", f"Nem támogatott event_type: {event_type!r}", json.dumps(event, ensure_ascii=False))
 
 
+def signal_monitor_ready() -> None:
+    """Atomically signal successful MQTT connection to the PowerShell launcher."""
+    import os
+
+    ready_file = os.environ.get("BODYLINE_READY_FILE")
+    if not ready_file:
+        return
+    target = Path(ready_file)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(
+        "status=connected\\n"
+        + f"timestamp={datetime.now().astimezone().isoformat()}\\n",
+        encoding="utf-8",
+    )
+    temporary.replace(target)
+
+
+def clear_monitor_ready() -> None:
+    """Remove the ready signal after an MQTT disconnect."""
+    import os
+
+    ready_file = os.environ.get("BODYLINE_READY_FILE")
+    if ready_file:
+        try:
+            Path(ready_file).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def main() -> None:
     conn = connect_db()
     try:
@@ -358,9 +388,15 @@ def main() -> None:
     def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
         if reason_code == 0:
             client.subscribe(TOPIC, qos=1)
+            signal_monitor_ready()
             print(f"MQTT monitor connected; subscribed to: {TOPIC}")
         else:
+            clear_monitor_ready()
             print(f"MQTT connection error: {reason_code}")
+
+    def on_disconnect(client: mqtt.Client, userdata: Any, disconnect_flags: Any, reason_code: Any, properties: Any) -> None:
+        clear_monitor_ready()
+        print(f"MQTT monitor disconnected: {reason_code}")
 
     def on_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage) -> None:
         raw = message.payload.decode("utf-8", errors="replace")
@@ -373,7 +409,7 @@ def main() -> None:
             except sqlite3.Error as db_exc:
                 print(f"System-error database logging failure: {db_exc}")
 
-    client.on_connect, client.on_message = on_connect, on_message
+    client.on_connect, client.on_disconnect, client.on_message = on_connect, on_disconnect, on_message
     while True:
         try:
             client.connect(BROKER_HOST, BROKER_PORT, keepalive=30)
