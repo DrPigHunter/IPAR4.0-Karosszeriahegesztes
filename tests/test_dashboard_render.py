@@ -34,6 +34,10 @@ class DashboardRenderTests(unittest.TestCase):
             visible_text = "\\n".join((rendered_markdown, rendered_titles, rendered_subheaders))
             self.assertIn("Gyártócella élő nézete", visible_text)
             self.assertIn("Production log", visible_text)
+            self.assertTrue(
+                any(button.label == "⏻ Kilépés és minden leállítása" for button in app.button),
+                "Dashboard shutdown button is not visible.",
+            )
             self.assertTrue(ready_file.is_file(), "Dashboard did not write its readiness signal.")
             self.assertEqual(
                 ready_file.read_text(encoding="utf-8").strip(),
