@@ -97,7 +97,8 @@ $quotedLogDir = $logDir.Replace("'", "''")
 $quotedMonitorLog = (Join-Path $logDir "monitor.log").Replace("'", "''")
 $quotedDashboardLog = (Join-Path $logDir "dashboard.log").Replace("'", "''")
 $monitorCommand = "Set-Location -LiteralPath '$quotedRoot'; New-Item -ItemType Directory -Force -Path '$quotedLogDir' | Out-Null; & '$quotedPython' -u -m src.monitor 2>&1 | Tee-Object -FilePath '$quotedMonitorLog' -Append"
-$dashboardCommand = "Set-Location -LiteralPath '$quotedRoot'; New-Item -ItemType Directory -Force -Path '$quotedLogDir' | Out-Null; & '$quotedPython' -u -m streamlit run src/dashboard.py 2>&1 | Tee-Object -FilePath '$quotedDashboardLog' -Append"
+# Streamlit must not open its own browser; the launcher opens the URL exactly once after health checks.
+$dashboardCommand = "Set-Location -LiteralPath '$quotedRoot'; New-Item -ItemType Directory -Force -Path '$quotedLogDir' | Out-Null; & '$quotedPython' -u -m streamlit run --server.headless true src/dashboard.py 2>&1 | Tee-Object -FilePath '$quotedDashboardLog' -Append"
 
 Start-Process -FilePath "powershell.exe" -ArgumentList @(
     "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $monitorCommand
