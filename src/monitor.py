@@ -147,13 +147,17 @@ def process_event(
         if not resolved:
             return
         config_id, config = resolved
+        prior_start = conn.execute(
+            "SELECT started_received_at FROM bodies WHERE body_id=?", (body_id,)
+        ).fetchone()
+        is_first_load = prior_start is None or prior_start["started_received_at"] is None
         _ensure_body(conn, body_id, config_id, config, timestamp)
         conn.execute(
             "UPDATE bodies SET started_received_at=COALESCE(started_received_at, ?) WHERE body_id=?",
             (received_at, body_id),
         )
         conn.commit()
-        if log_dir is not None:
+        if log_dir is not None and is_first_load:
             try:
                 from src.run_logger import write_part_loaded_log
                 write_part_loaded_log(log_dir, body_id, config, timestamp)
@@ -214,6 +218,10 @@ def process_event(
         if not resolved:
             return
         config_id, config = resolved
+        prior_completion = conn.execute(
+            "SELECT completed_at FROM bodies WHERE body_id=?", (body_id,)
+        ).fetchone()
+        is_first_completion = prior_completion is None or prior_completion["completed_at"] is None
         _ensure_body(conn, body_id, config_id, config, timestamp)
         expected_ids = list(config["expected_weld_ids"])
         conn.execute(
@@ -288,7 +296,7 @@ def process_event(
                 (body_id, reason, REWORK_WAITING, timestamp, timestamp),
             )
         conn.commit()
-        if log_dir is not None:
+        if log_dir is not None and is_first_completion:
             try:
                 from src.run_logger import write_run_log
                 path = write_run_log(
