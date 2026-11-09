@@ -411,14 +411,19 @@ def main() -> None:
 
     client.on_connect, client.on_disconnect, client.on_message = on_connect, on_disconnect, on_message
     shutdown_file = LOG_DIR / "shutdown.request"
+    production_idle_file = LOG_DIR / "production_idle.ready"
+
+    def shutdown_is_safe() -> bool:
+        # Keep receiving weld events until the active sidewall has a committed final verdict.
+        return shutdown_file.exists() and production_idle_file.exists()
 
     try:
-        while not shutdown_file.exists():
+        while not shutdown_is_safe():
             try:
                 client.connect(BROKER_HOST, BROKER_PORT, keepalive=30)
                 client.loop_start()
-                print("MQTT monitor running. Waiting for production events or shutdown request.")
-                while not shutdown_file.exists():
+                print("MQTT monitor running. Waiting for production events or safe shutdown.")
+                while not shutdown_is_safe():
                     time.sleep(0.25)
                 break
             except (OSError, mqtt.MQTTException) as exc:
