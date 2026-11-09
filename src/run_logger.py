@@ -152,12 +152,18 @@ def write_run_log(
         shown = ", ".join(items[:limit])
         return f"{shown} (+{len(items) - limit} more)" if len(items) > limit else shown
 
+    rework_status = {
+        "UTÓMUNKÁRA VÁR": "WAITING FOR REWORK",
+        "UTÓMUNKA FOLYAMATBAN": "REWORK IN PROGRESS",
+        "UTÓMUNKA ELVÉGEZVE – ÚJRAELLENŐRZÉS SZÜKSÉGES": "REWORK COMPLETED - RE-INSPECTION REQUIRED",
+    }.get(str(rework["status"]) if rework else "", "NOT REGISTERED")
     issues = [
-        f"Faulty weld points: {int(parameter_errors)}",
+        f"Faulty weld points: {len(error_points)}",
+        f"Parameter errors: {int(parameter_errors)}",
         f"Missing points: {short_ids(evaluation.get('missing_ids', []))}",
         f"Unexpected points: {short_ids(evaluation.get('unexpected_ids', []))}",
         f"Duplicate points: {short_ids(evaluation.get('duplicate_ids', []))}",
-        f"Rework status: {str(rework['status']) if rework else 'not registered'}",
+        f"Rework status: {rework_status}",
     ]
     line = (
         f"{_local_timestamp(timestamp)} | PART REMOVED FROM LINE | "
