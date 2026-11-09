@@ -366,6 +366,8 @@ try {
     Write-Host "[4/5] Starting MQTT monitor and dashboard..." -ForegroundColor Yellow
     Remove-Item -LiteralPath $monitorReadyFile -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $dashboardReadyFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $logDir "shutdown.request") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $logDir "production_idle.ready") -Force -ErrorAction SilentlyContinue
     $monitorWindow = Start-BodylineServiceWindow -Service "monitor" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":monitor") -Helper $helperPath
     if (-not (Wait-ForMonitorReady -ReadyPath $monitorReadyFile -TimeoutSeconds 30)) {
         Show-LogTail -Path $monitorLog -Title "Monitor log"
