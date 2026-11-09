@@ -88,8 +88,7 @@ function Stop-BodylineMonitorProcesses {
     foreach ($process in $snapshot) {
         if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
         $cmd = [string]$process.CommandLine
-        $isMonitorHelper = ($cmd -match 'Run-Bodyline-Service\.ps1') -and
-            ($cmd -match 'Run-Bodyline-Service\.ps1') -and ($cmd -match 'monitor') -and
+        $isMonitorHelper = ($cmd -match 'Run-Bodyline-Service\.ps1') -and ($cmd -match 'monitor') -and
             (($cmd.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
              ($cmd.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0))
         if ($isMonitorHelper) {
