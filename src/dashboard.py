@@ -1113,7 +1113,7 @@ def signal_dashboard_ready() -> None:
         temporary = target.with_name(
             target.name + f".{os.getpid()}.{threading.get_ident()}.tmp"
         )
-        temporary.write_text(f"source_sha={source_hash}\\n", encoding="utf-8")
+        temporary.write_text(f"source_sha={source_hash}", encoding="utf-8")
         os.replace(temporary, target)
     except OSError as exc:
         print(f"WARNING: could not write dashboard readiness signal: {exc}")
