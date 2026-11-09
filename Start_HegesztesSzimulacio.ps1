@@ -63,7 +63,7 @@ function Test-DashboardHealth {
 
 function Get-BodylineServiceProcesses {
     param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
-    $matches = @()
+    $resultItems = @()
     foreach ($process in (Get-ProcessSnapshot)) {
         if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
         $commandLine = [string]$process.CommandLine
@@ -74,10 +74,10 @@ function Get-BodylineServiceProcesses {
             ($commandLine.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
         $hasMarker = $commandLine.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
         if (($usesProjectPython -and ($isMonitorCommand -or $isDashboardCommand)) -or $isHelperCommand -or $hasMarker) {
-            $matches += $process
+            $resultItems += $process
         }
     }
-    return @($matches)
+    return @($resultItems)
 }
 
 function Stop-BodylineMonitorProcesses {
@@ -89,7 +89,7 @@ function Stop-BodylineMonitorProcesses {
         if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
         $cmd = [string]$process.CommandLine
         $isMonitorHelper = ($cmd -match 'Run-Bodyline-Service\.ps1') -and
-            ($cmd -match 'Service\s+monitor') -and
+            ($cmd -match 'Run-Bodyline-Service\.ps1') -and ($cmd -match 'monitor') -and
             (($cmd.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
              ($cmd.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0))
         if ($isMonitorHelper) {
