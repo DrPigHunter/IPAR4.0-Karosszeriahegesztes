@@ -437,6 +437,16 @@ def main() -> None:
         except (RuntimeError, mqtt.MQTTException):
             pass
         conn.close()
+        stopped_file = __import__("os").environ.get("BODYLINE_STOPPED_FILE")
+        if stopped_file:
+            try:
+                target = Path(stopped_file)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_suffix(target.suffix + ".tmp")
+                temporary.write_text("status=stopped", encoding="utf-8")
+                temporary.replace(target)
+            except OSError as exc:
+                print(f"WARNING: could not write monitor stop signal: {exc}")
         print("MQTT monitor stopped cleanly.")
 
 
