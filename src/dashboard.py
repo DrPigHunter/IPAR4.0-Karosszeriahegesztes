@@ -208,7 +208,8 @@ def automatic_production_worker(
     """Publish one simulated sidewall at a time; do maintenance during the inter-body break."""
     state["running"] = True
     previous_config = ""
-    while not stop_event.is_set():
+    shutdown_request_file = ROOT / "logs" / "shutdown.request"
+    while not stop_event.is_set() and not shutdown_request_file.exists():
         apply_factory_settings(state)
         wear_state = ensure_wear_state(state.setdefault("wear_state", {}))
         tool_change_interval = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
@@ -243,7 +244,7 @@ def automatic_production_worker(
                 persist_equipment_state(state)
                 break
 
-        if stop_event.is_set():
+        if stop_event.is_set() or shutdown_request_file.exists():
             break
         options = [value for value in config_ids if value != previous_config] or config_ids
         config_id = random.choice(options)
@@ -271,6 +272,8 @@ def automatic_production_worker(
         body_id = ""
         publish_delay_ms = 0.0
         monitor_confirmed = False
+        if stop_event.is_set() or shutdown_request_file.exists():
+            break
         try:
             # Reload lets a local Git pull update the simulator when Streamlit has cached it.
             importlib.reload(simulator_module)
