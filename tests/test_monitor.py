@@ -118,6 +118,30 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(body["status"], "MEGFELELŐ")
         self.assertIsNone(queue)
 
+    def test_part_load_and_weld_fault_are_logged_before_part_completion(self):
+        log_dir = Path(self.tmp.name) / "logs"
+        log_path = log_dir / "production_log.txt"
+        body_id = "BODY-LIVE-LOG-TEST"
+
+        process_event(self.conn, body_start(body_id), log_dir=log_dir)
+        self.assertTrue(log_path.exists())
+        lines_after_load = log_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines_after_load), 1)
+        self.assertIn("NEW PART LOADED SUCCESSFULLY", lines_after_load[0])
+
+        high_current = self.config["limits"].current_max + 2
+        process_event(self.conn, weld(body_id, self.points[0], current=high_current), log_dir=log_dir)
+        lines_after_fault = log_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines_after_fault), 2)
+        self.assertIn("WELDING FAULT", lines_after_fault[1])
+        self.assertIn(self.points[0]["weld_id"], lines_after_fault[1])
+
+        # No body_complete event has been published yet; both records are already durable.
+        self.assertEqual(
+            self.conn.execute("SELECT status FROM bodies WHERE body_id=?", (body_id,)).fetchone()["status"],
+            "FOLYAMATBAN",
+        )
+
     def test_completed_cycle_writes_compact_english_txt_lifecycle_log(self):
         log_dir = Path(self.tmp.name) / "logs"
         body_id = "BODY-LOG-TEST"
