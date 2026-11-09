@@ -1,6 +1,7 @@
 """English, human-readable production log: lifecycle events per part and weld faults."""
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -144,6 +145,19 @@ def write_run_log(
             f"{received_expected}/{expected_count}{duration}"
         )
         return _append_line(log_dir, line)
+
+    rows = conn.execute(
+        "SELECT weld_id,errors_json FROM weld_events WHERE body_id=? ORDER BY id",
+        (body_id,),
+    ).fetchall()
+    error_points: set[str] = set()
+    for row in rows:
+        try:
+            row_errors = json.loads(row["errors_json"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            row_errors = ["unreadable validation details"]
+        if row_errors:
+            error_points.add(str(row["weld_id"]))
 
     def short_ids(values: Any, limit: int = 8) -> str:
         items = [str(value) for value in values or []]
