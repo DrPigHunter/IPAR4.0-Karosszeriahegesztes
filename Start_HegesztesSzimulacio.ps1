@@ -105,7 +105,7 @@ function Wait-ForMonitorReady {
                 if ($content.Length -gt $StartOffset) {
                     $newContent = $content.Substring([Math]::Min($StartOffset, $content.Length))
                     if ($newContent.Contains("MQTT monitor csatlakozott")) { return $true }
-                    if ($newContent.Contains("KRITIKUS KONFIGURACIOS HIBA")) { return $false }
+                    if ($newContent.Contains("KRITIKUS")) { return $false }
                 }
             } catch {}
         }
