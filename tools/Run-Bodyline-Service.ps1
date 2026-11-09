@@ -28,7 +28,7 @@ if ($Service -eq "monitor") {
 } else {
     $logPath = Join-Path $logDir "dashboard.log"
     # Streamlit is headless: only the parent launcher opens the browser.
-    & $python -u -m streamlit run --server.headless true --server.port 8501 --server.address 127.0.0.1 src/dashboard.py 2>&1 | Tee-Object -FilePath $logPath -Append
+    & $python -u -m streamlit run --server.headless true --server.port 8501 src/dashboard.py 2>&1 | Tee-Object -FilePath $logPath -Append
 }
 
 $serviceExitCode = $LASTEXITCODE
