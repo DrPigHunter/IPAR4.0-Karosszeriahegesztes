@@ -237,7 +237,7 @@ try {
     }
 
     Write-Host "[4/5] MQTT-monitor es dashboard inditasa..." -ForegroundColor Yellow
-    $monitorOffset = if (Test-Path -LiteralPath $monitorLog) { (Get-Item -LiteralPath $monitorLog).Length } else { 0 }
+    $monitorOffset = Get-TextFileLength -Path $monitorLog
     $monitorWindow = Start-BodylineServiceWindow -Service "monitor" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":monitor") -Helper $helperPath
     if (-not (Wait-ForMonitorReady -LogPath $monitorLog -StartOffset $monitorOffset -TimeoutSeconds 30)) {
         Show-LogTail -Path $monitorLog -Title "Monitor naplo"
