@@ -8,6 +8,7 @@ import json
 import os
 import random
 import sqlite3
+import subprocess
 import threading
 import time
 import uuid
@@ -30,7 +31,7 @@ from src.monitor import (
 )
 from src.parameter_audit import build_parameter_audit
 from src import simulator as simulator_module
-from src.run_logger import LOG_FILE_NAME, write_system_status_log
+from src.run_logger import LOG_FILE_NAME, write_lifecycle_log, write_system_status_log
 from src.speed_control import (
     CYCLE_TARGET_SECONDS, DEFAULT_SPEED_PERCENT, DEFAULT_TARGET_CYCLE_SECONDS,
     MAX_SPEED_PERCENT, MIN_SPEED_PERCENT, base_publish_delay_ms, normalize_speed_percent,
@@ -461,6 +462,7 @@ def automatic_production_worker(
         else:
             stop_event.wait(inter_body_pause_seconds)
     state["running"] = False
+    mark_production_idle_for_shutdown()
 
 
 def session_bodies_only(bodies: pd.DataFrame) -> pd.DataFrame:
@@ -590,15 +592,102 @@ def start_automatic_production() -> None:
 
 
 def safe_application_log(event: str, details: dict[str, Any] | None = None, level: str = "INFO") -> None:
-    """Keep routine UI activity out of the part log; persist warnings and errors only."""
-    if level.upper() == "INFO":
-        return
+    """Log important process lifecycle events and all warnings/errors immediately."""
+    lifecycle_events = {
+        "application_started",
+        "automatic_production_started",
+        "automatic_production_stop_requested",
+        "application_exit_requested",
+        "all_services_stopped",
+    }
     try:
-        write_system_status_log(ROOT / "logs", event, level=level)
+        if event in lifecycle_events:
+            write_lifecycle_log(ROOT / "logs", event)
+        elif level.upper() != "INFO":
+            write_system_status_log(ROOT / "logs", event, level=level)
     except Exception as exc:
         print(f"WARNING: could not write system status to production TXT log: {exc}")
 
 
+def mark_production_idle_for_shutdown() -> None:
+    """Signal that the active sidewall cycle has safely reached a stop point."""
+    logs = ROOT / "logs"
+    request = logs / "shutdown.request"
+    if not request.exists():
+        return
+    try:
+        logs.mkdir(parents=True, exist_ok=True)
+        marker = logs / "production_idle.ready"
+        temporary = logs / f"production_idle.{os.getpid()}.tmp"
+        temporary.write_text("status=idle", encoding="utf-8")
+        os.replace(temporary, marker)
+    except OSError as exc:
+        print(f"WARNING: could not write production-idle shutdown signal: {exc}")
+
+
+def request_full_shutdown() -> None:
+    """Stop production at a safe cycle boundary and then stop every BODYLINE service."""
+    logs = ROOT / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    request_file = logs / "shutdown.request"
+    idle_file = logs / "production_idle.ready"
+    stop_script = ROOT / "tools" / "Stop-Bodyline.ps1"
+
+    if request_file.exists():
+        st.warning("A BODYLINE shutdown is already in progress.")
+        return
+    if not stop_script.is_file():
+        st.error("The shutdown helper is missing. Pull the latest GitHub branch first.")
+        return
+
+    try:
+        write_lifecycle_log(logs, "application_exit_requested")
+        idle_file.unlink(missing_ok=True)
+        request_file.write_text(
+            pd.Timestamp.now(tz="UTC").isoformat(),
+            encoding="utf-8",
+        )
+
+        state = st.session_state.get("auto_state", {})
+        state["running"] = False
+        stop_event = st.session_state.get("auto_stop_event")
+        if stop_event is not None:
+            stop_event.set()
+
+        worker = st.session_state.get("auto_thread")
+        if worker is None or not worker.is_alive():
+            mark_production_idle_for_shutdown()
+
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", str(stop_script),
+            "-ProjectRoot", str(ROOT),
+        ]
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            command,
+            cwd=str(ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags,
+        )
+        st.success(
+            "Shutdown requested. The current sidewall cycle will finish safely; "
+            "then the dashboard, MQTT monitor and broker will stop."
+        )
+        st.info("The production log is being updated continuously in logs/production_log.txt.")
+    except Exception as exc:
+        try:
+            write_system_status_log(logs, f"Shutdown request failed: {exc}", level="ERROR")
+        except Exception:
+            pass
+        st.error(f"Could not start the BODYLINE shutdown: {exc}")
+
+
+@st.fragment(run_every="2s")
 def render_complete_log_tab() -> None:
     """Show and download the concise English production TXT log."""
     log_path = ROOT / "logs" / LOG_FILE_NAME
@@ -689,6 +778,7 @@ if st.session_state.get("app_process_id") != os.getpid():
     st.session_state["app_process_id"] = os.getpid()
     st.session_state["app_session_started_at"] = time.time()
     st.session_state["app_session_id"] = uuid.uuid4().hex
+    safe_application_log("application_started")
     st.session_state.pop("auto_state", None)
     st.session_state.pop("auto_thread", None)
     st.session_state.pop("auto_stop_event", None)
@@ -738,6 +828,11 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+exit_col, _ = st.columns([1.7, 8.3])
+with exit_col:
+    if st.button("⏻ Kilépés és minden leállítása", key="full_application_shutdown", type="secondary", use_container_width=True):
+        request_full_shutdown()
 
 
 production_tab, statistics_tab, log_tab = st.tabs([
