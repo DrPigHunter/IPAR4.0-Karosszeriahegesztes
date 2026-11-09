@@ -140,21 +140,29 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(list(log_dir.glob("production_*.jsonl")), [])
 
     def test_rework_state_transitions_are_logged(self):
-        process_event(self.conn, body_start())
+        log_dir = Path(self.tmp.name) / "logs"
+        process_event(self.conn, body_start(), log_dir=log_dir)
         for point in self.points[1:]:
-            process_event(self.conn, weld("BODY-TEST", point))
-        process_event(self.conn, complete())
+            process_event(self.conn, weld("BODY-TEST", point), log_dir=log_dir)
+        process_event(self.conn, complete(), log_dir=log_dir)
         process_event(self.conn, {"event_type": "rework_action", "body_id": "BODY-TEST",
-                                  "action": "START", "note": "Elkezdve", "timestamp": now_iso()})
+                                  "action": "START", "note": "Elkezdve", "timestamp": now_iso()},
+                      log_dir=log_dir)
         row = self.conn.execute("SELECT status FROM rework_queue WHERE body_id='BODY-TEST'").fetchone()
         self.assertEqual(row["status"], REWORK_IN_PROGRESS)
         process_event(self.conn, {"event_type": "rework_action", "body_id": "BODY-TEST",
-                                  "action": "COMPLETE", "note": "Javítás kész", "timestamp": now_iso()})
+                                  "action": "COMPLETE", "note": "Javítás kész", "timestamp": now_iso()},
+                      log_dir=log_dir)
         row = self.conn.execute("SELECT status, resolution_note FROM rework_queue WHERE body_id='BODY-TEST'").fetchone()
         actions = self.conn.execute("SELECT COUNT(*) FROM rework_actions").fetchone()[0]
         self.assertEqual(row["status"], REWORK_DONE)
         self.assertEqual(row["resolution_note"], "Javítás kész")
         self.assertEqual(actions, 2)
+        log_text = (log_dir / "production_log.txt").read_text(encoding="utf-8")
+        self.assertIn("REWORK STARTED", log_text)
+        self.assertIn("REWORK COMPLETED | READY FOR RE-INSPECTION", log_text)
+        self.assertNotIn("Elkezdve", log_text)
+        self.assertNotIn("Javítás kész", log_text)
 
     def test_unknown_event_type_is_logged(self):
         process_event(self.conn, {"event_type": "mystery", "body_id": "BODY-TEST"})
