@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import importlib
 import json
 import os
@@ -1098,3 +1099,24 @@ with statistics_tab:
 
 with log_tab:
     render_complete_log_tab()
+
+
+def signal_dashboard_ready() -> None:
+    """Tell the launcher that this exact dashboard source rendered successfully."""
+    ready_file = os.environ.get("BODYLINE_DASHBOARD_READY_FILE")
+    if not ready_file:
+        return
+    try:
+        target = Path(ready_file)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source_hash = hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()
+        temporary = target.with_name(
+            target.name + f".{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        temporary.write_text(f"source_sha={source_hash}\\n", encoding="utf-8")
+        os.replace(temporary, target)
+    except OSError as exc:
+        print(f"WARNING: could not write dashboard readiness signal: {exc}")
+
+
+signal_dashboard_ready()
