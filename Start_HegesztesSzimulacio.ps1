@@ -75,9 +75,9 @@ function Stop-ExistingBodylineProcesses {
         if ($hasCurrentMarker -or ($usesProjectPython -and ($isMonitorCommand -or $isDashboardCommand)) -or $isLegacyWrapper) {
             try {
                 & "$env:SystemRoot\System32\taskkill.exe" /PID $process.ProcessId /T /F *> $null
-                Write-Host ("Korábbi BODYLINE-folyamat leállítva (PID {0})." -f $process.ProcessId) -ForegroundColor DarkGray
+                Write-Host ("Korabbi BODYLINE-folyamat leallitva (PID {0})." -f $process.ProcessId) -ForegroundColor DarkGray
             } catch {
-                Write-Warning ("A régi folyamatot nem sikerült leállítani (PID {0}): {1}" -f $process.ProcessId, $_.Exception.Message)
+                Write-Warning ("A regi folyamatot nem sikerult leallitani (PID {0}): {1}" -f $process.ProcessId, $_.Exception.Message)
             }
         }
     }
@@ -105,7 +105,7 @@ function Wait-ForMonitorReady {
                 if ($content.Length -gt $StartOffset) {
                     $newContent = $content.Substring([Math]::Min($StartOffset, $content.Length))
                     if ($newContent.Contains("MQTT monitor csatlakozott")) { return $true }
-                    if ($newContent.Contains("KRITIKUS KONFIGURÁCIÓS HIBA")) { return $false }
+                    if ($newContent.Contains("KRITIKUS KONFIGURACIOS HIBA")) { return $false }
                 }
             } catch {}
         }
@@ -121,7 +121,7 @@ function Show-LogTail {
     if (Test-Path -LiteralPath $Path) {
         Get-Content -LiteralPath $Path -Tail 35 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
     } else {
-        Write-Host "A naplófájl még nem jött létre: $Path" -ForegroundColor DarkGray
+        Write-Host "A naplofajl meg nem jott letre: $Path" -ForegroundColor DarkGray
     }
 }
 
@@ -133,7 +133,7 @@ try {
     }
 
     if (-not $mutexAcquired) {
-        Write-Host "A BODYLINE indítása már folyamatban van. Nem indítok második példányt." -ForegroundColor Yellow
+        Write-Host "A BODYLINE inditasa mar folyamatban van. Nem inditok masodik peldanyt." -ForegroundColor Yellow
         return
     }
 
@@ -265,7 +265,7 @@ try {
     Write-Host "A bongeszo megnyitasa egyszer..." -ForegroundColor Yellow
     Start-Process -FilePath $dashboardUrl | Out-Null
     Write-Host ""
-    Write-Host "A BODYLINE elindult. A gyartas alapbol leallitott allapotban van; az automatikat az Élő gyártás fulon indithatod." -ForegroundColor Green
+    Write-Host "A BODYLINE elindult. A gyartas alapbol leallitott allapotban van; az automatikat az Elo gyartas fulon indithatod." -ForegroundColor Green
     Write-Host "A monitor es a dashboard ablakat hagyd nyitva. Naplok: $logDir"
     Write-Host ""
 } catch {
