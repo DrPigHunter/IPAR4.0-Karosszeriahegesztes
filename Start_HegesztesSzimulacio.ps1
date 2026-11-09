@@ -6,6 +6,7 @@ $venvPython = Join-Path $root ".venv\Scripts\python.exe"
 $helperPath = Join-Path $root "tools\Run-Bodyline-Service.ps1"
 $logDir = Join-Path $root "logs"
 $monitorLog = Join-Path $logDir "monitor.log"
+$monitorReadyFile = Join-Path $logDir "monitor.ready"
 $dashboardLog = Join-Path $logDir "dashboard.log"
 $dashboardUrl = "http://localhost:8501"
 $dashboardHealthUrl = "$dashboardUrl/_stcore/health"
@@ -60,26 +61,111 @@ function Test-DashboardHealth {
     }
 }
 
-function Stop-ExistingBodylineProcesses {
+function Get-BodylineServiceProcesses {
     param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
-    $processes = Get-ProcessSnapshot
-    foreach ($process in $processes) {
+    $matches = @()
+    foreach ($process in (Get-ProcessSnapshot)) {
         if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
         $commandLine = [string]$process.CommandLine
-        $hasCurrentMarker = $commandLine.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
         $usesProjectPython = $commandLine.IndexOf($PythonPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
         $isMonitorCommand = $commandLine -match 'src\.monitor'
         $isDashboardCommand = ($commandLine -match 'streamlit\s+run') -and ($commandLine -match 'src[/\\]dashboard\.py')
-        $isLegacyWrapper = ($commandLine.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and ($isMonitorCommand -or $isDashboardCommand)
+        $isHelperCommand = ($commandLine -match 'Run-Bodyline-Service\.ps1') -and
+            ($commandLine.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        $hasMarker = $commandLine.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        if (($usesProjectPython -and ($isMonitorCommand -or $isDashboardCommand)) -or $isHelperCommand -or $hasMarker) {
+            $matches += $process
+        }
+    }
+    return @($matches)
+}
 
-        if ($hasCurrentMarker -or ($usesProjectPython -and ($isMonitorCommand -or $isDashboardCommand)) -or $isLegacyWrapper) {
-            try {
-                & "$env:SystemRoot\System32\taskkill.exe" /PID $process.ProcessId /T /F *> $null
-                Write-Host ("Korabbi BODYLINE-folyamat leallitva (PID {0})." -f $process.ProcessId) -ForegroundColor DarkGray
-            } catch {
-                Write-Warning ("A regi folyamatot nem sikerult leallitani (PID {0}): {1}" -f $process.ProcessId, $_.Exception.Message)
+function Stop-BodylineMonitorProcesses {
+    param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
+    $snapshot = Get-ProcessSnapshot
+
+    # Stop monitor helper windows first; taskkill then terminates their child Python process.
+    foreach ($process in $snapshot) {
+        if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+        $cmd = [string]$process.CommandLine
+        $isMonitorHelper = ($cmd -match 'Run-Bodyline-Service\.ps1') -and
+            ($cmd -match 'Service\s+monitor') -and
+            (($cmd.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+             ($cmd.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0))
+        if ($isMonitorHelper) {
+            & "$env:SystemRoot\System32\taskkill.exe" /PID $process.ProcessId /T /F *> $null
+        }
+    }
+
+    # Then remove orphaned monitor interpreters, without touching the healthy dashboard.
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        $remaining = @()
+        foreach ($process in (Get-ProcessSnapshot)) {
+            if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+            $cmd = [string]$process.CommandLine
+            $usesProjectPython = $cmd.IndexOf($PythonPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            if ($usesProjectPython -and ($cmd -match 'src\.monitor')) {
+                $remaining += $process
             }
         }
+        if ($remaining.Count -eq 0) { return }
+        foreach ($process in $remaining) {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    $remaining = @()
+    foreach ($process in (Get-ProcessSnapshot)) {
+        if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+        $cmd = [string]$process.CommandLine
+        if (($cmd.IndexOf($PythonPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and ($cmd -match 'src\.monitor')) {
+            $remaining += $process
+        }
+    }
+    foreach ($process in $remaining) {
+        Write-Warning ("A monitor process is still running (PID {0})." -f $process.ProcessId)
+    }
+}
+
+function Stop-ExistingBodylineProcesses {
+    param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
+
+    $snapshot = Get-ProcessSnapshot
+    # Kill old service wrapper trees once. Do not later taskkill the same child PIDs again.
+    foreach ($process in $snapshot) {
+        if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+        $cmd = [string]$process.CommandLine
+        $isServiceHelper = ($cmd -match 'Run-Bodyline-Service\.ps1') -and
+            (($cmd.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+             ($cmd.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0))
+        if ($isServiceHelper) {
+            & "$env:SystemRoot\System32\taskkill.exe" /PID $process.ProcessId /T /F *> $null
+        }
+    }
+
+    # Terminate any orphaned Python service processes and wait until they are actually gone.
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        $remaining = @(Get-BodylineServiceProcesses -RootPath $RootPath -PythonPath $PythonPath -MarkerPrefix $MarkerPrefix |
+            Where-Object {
+                $cmd = [string]$_.CommandLine
+                ($cmd.IndexOf($PythonPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and
+                (($cmd -match 'src\.monitor') -or
+                 (($cmd -match 'streamlit\s+run') -and ($cmd -match 'src[/\\]dashboard\.py')))
+            })
+
+        if ($remaining.Count -eq 0) { return }
+
+        foreach ($process in $remaining) {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    $remaining = @(Get-BodylineServiceProcesses -RootPath $RootPath -PythonPath $PythonPath -MarkerPrefix $MarkerPrefix)
+    if ($remaining.Count -gt 0) {
+        $pids = ($remaining | ForEach-Object { [string]$_.ProcessId }) -join ", "
+        throw "Could not stop old BODYLINE service processes. Remaining PID(s): $pids"
     }
 }
 
@@ -95,21 +181,23 @@ function Get-TextFileLength {
     try { return [System.IO.File]::ReadAllText($Path).Length } catch { return 0 }
 }
 
+function Test-MonitorReadySignal {
+    param([string]$ReadyPath)
+    if (-not (Test-Path -LiteralPath $ReadyPath)) { return $false }
+    try {
+        $content = [System.IO.File]::ReadAllText($ReadyPath)
+        return $content.Contains("status=connected")
+    } catch {
+        return $false
+    }
+}
+
 function Wait-ForMonitorReady {
-    param([string]$LogPath, [long]$StartOffset, [int]$TimeoutSeconds)
+    param([string]$ReadyPath, [int]$TimeoutSeconds)
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
     while ($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-        if (Test-Path -LiteralPath $LogPath) {
-            try {
-                $content = [System.IO.File]::ReadAllText($LogPath)
-                if ($content.Length -gt $StartOffset) {
-                    $newContent = $content.Substring([Math]::Min($StartOffset, $content.Length))
-                    if ($newContent.Contains("MQTT monitor connected")) { return $true }
-                    if ($newContent.Contains("KRITIKUS")) { return $false }
-                }
-            } catch {}
-        }
-        Start-Sleep -Seconds 1
+        if (Test-MonitorReadySignal -ReadyPath $ReadyPath) { return $true }
+        Start-Sleep -Milliseconds 500
     }
     return $false
 }
@@ -208,13 +296,14 @@ try {
                 $cmd = [string]$process.CommandLine
                 if (($cmd.IndexOf($venvPython, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and ($cmd -match 'src\.monitor')) { $monitorExists = $true; break }
             }
-            if (-not $monitorExists) {
-                Write-Host "A dashboard mar fut; a hianyzo monitor inditasa..." -ForegroundColor Yellow
-                $monitorOffset = Get-TextFileLength -Path $monitorLog
+            if (-not $monitorExists -or -not (Test-MonitorReadySignal -ReadyPath $monitorReadyFile)) {
+                Write-Host "The dashboard is healthy; restarting the monitor so its MQTT readiness can be verified..." -ForegroundColor Yellow
+                Stop-BodylineMonitorProcesses -RootPath $root -PythonPath $venvPython -MarkerPrefix $serviceMarkerPrefix
+                Remove-Item -LiteralPath $monitorReadyFile -Force -ErrorAction SilentlyContinue
                 $monitorWindow = Start-BodylineServiceWindow -Service "monitor" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":monitor") -Helper $helperPath
-                if (-not (Wait-ForMonitorReady -LogPath $monitorLog -StartOffset $monitorOffset -TimeoutSeconds 30)) {
-                    Show-LogTail -Path $monitorLog -Title "Monitor naplo"
-                    throw "A monitor nem csatlakozott az MQTT-brokerhez. A gyartast addig ne inditsd el."
+                if (-not (Wait-ForMonitorReady -ReadyPath $monitorReadyFile -TimeoutSeconds 30)) {
+                    Show-LogTail -Path $monitorLog -Title "Monitor log"
+                    throw "The monitor did not connect to the MQTT broker. Do not start production yet."
                 }
             }
             Write-Host "A BODYLINE mar fut. Nem inditottam ujabb peldanyt es nem nyitottam uj bongeszoablakot." -ForegroundColor Green
@@ -236,12 +325,12 @@ try {
         throw "A localhost:$dashboardPort port tovabbra is foglalt (PID: $busyPid). Nem inditok masodik dashboardot."
     }
 
-    Write-Host "[4/5] MQTT-monitor es dashboard inditasa..." -ForegroundColor Yellow
-    $monitorOffset = Get-TextFileLength -Path $monitorLog
+    Write-Host "[4/5] Starting MQTT monitor and dashboard..." -ForegroundColor Yellow
+    Remove-Item -LiteralPath $monitorReadyFile -Force -ErrorAction SilentlyContinue
     $monitorWindow = Start-BodylineServiceWindow -Service "monitor" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":monitor") -Helper $helperPath
-    if (-not (Wait-ForMonitorReady -LogPath $monitorLog -StartOffset $monitorOffset -TimeoutSeconds 30)) {
-        Show-LogTail -Path $monitorLog -Title "Monitor naplo"
-        throw "A monitor 30 masodperc alatt nem csatlakozott az MQTT-brokerhez. A dashboard inditasat megszakitottam."
+    if (-not (Wait-ForMonitorReady -ReadyPath $monitorReadyFile -TimeoutSeconds 30)) {
+        Show-LogTail -Path $monitorLog -Title "Monitor log"
+        throw "The monitor did not signal a successful MQTT connection within 30 seconds. Dashboard startup was cancelled."
     }
     Write-Host "Az MQTT-monitor csatlakozott." -ForegroundColor Green
 
