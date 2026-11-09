@@ -348,9 +348,9 @@ def main() -> None:
     try:
         from src.catalog import list_configurations
         all_configs = list_configurations()
-        print(f"Excel katalógus betöltve: {len(all_configs)} modell–alkatrész konfiguráció.")
+        print(f"Excel catalog loaded: {len(all_configs)} model/part configurations.")
     except CatalogError as exc:
-        print(f"KRITIKUS KONFIGURÁCIÓS HIBA: {exc}")
+        print(f"CRITICAL CATALOG CONFIGURATION ERROR: {exc}")
         raise
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="welding-monitor")
@@ -358,20 +358,20 @@ def main() -> None:
     def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
         if reason_code == 0:
             client.subscribe(TOPIC, qos=1)
-            print(f"MQTT monitor csatlakozott; feliratkozva: {TOPIC}")
+            print(f"MQTT monitor connected; subscribed to: {TOPIC}")
         else:
-            print(f"MQTT csatlakozási hiba: {reason_code}")
+            print(f"MQTT connection error: {reason_code}")
 
     def on_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage) -> None:
         raw = message.payload.decode("utf-8", errors="replace")
         try:
             process_event(conn, json.loads(raw), log_dir=LOG_DIR)
         except (sqlite3.Error, TypeError, ValueError, KeyError) as exc:
-            print(f"Üzenetfeldolgozási hiba: {exc}")
+            print(f"Message processing error: {exc}")
             try:
                 log_processing_error(conn, "FELDOLGOZÁSI HIBA", str(exc), raw)
             except sqlite3.Error as db_exc:
-                print(f"A hibanapló adatbázis-hibája: {db_exc}")
+                print(f"System-error database logging failure: {db_exc}")
 
     client.on_connect, client.on_message = on_connect, on_message
     while True:
@@ -379,7 +379,7 @@ def main() -> None:
             client.connect(BROKER_HOST, BROKER_PORT, keepalive=30)
             client.loop_forever(retry_first_connection=True)
         except (OSError, mqtt.MQTTException) as exc:
-            print(f"Broker még nem elérhető ({exc}); újrapróbálkozás 3 másodperc múlva.")
+            print(f"MQTT broker unavailable ({exc}); retrying in 3 seconds.")
             time.sleep(3)
 
 
