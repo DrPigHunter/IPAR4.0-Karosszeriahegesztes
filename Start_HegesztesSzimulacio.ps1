@@ -89,6 +89,12 @@ function Start-BodylineServiceWindow {
     return Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
 }
 
+function Get-TextFileLength {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    try { return [System.IO.File]::ReadAllText($Path).Length } catch { return 0 }
+}
+
 function Wait-ForMonitorReady {
     param([string]$LogPath, [long]$StartOffset, [int]$TimeoutSeconds)
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -204,7 +210,7 @@ try {
             }
             if (-not $monitorExists) {
                 Write-Host "A dashboard mar fut; a hianyzo monitor inditasa..." -ForegroundColor Yellow
-                $monitorOffset = if (Test-Path -LiteralPath $monitorLog) { (Get-Item -LiteralPath $monitorLog).Length } else { 0 }
+                $monitorOffset = Get-TextFileLength -Path $monitorLog
                 $monitorWindow = Start-BodylineServiceWindow -Service "monitor" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":monitor") -Helper $helperPath
                 if (-not (Wait-ForMonitorReady -LogPath $monitorLog -StartOffset $monitorOffset -TimeoutSeconds 30)) {
                     Show-LogTail -Path $monitorLog -Title "Monitor naplo"
