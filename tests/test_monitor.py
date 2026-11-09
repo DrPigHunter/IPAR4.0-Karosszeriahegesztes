@@ -74,16 +74,24 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads(body["missing_ids_json"]), [self.points[0]["weld_id"]])
         self.assertEqual(queue["body_id"], "BODY-TEST")
 
-    def test_out_of_range_parameter_routes_sidewall_to_rework(self):
-        process_event(self.conn, body_start())
+    def test_welding_fault_is_logged_in_english_and_part_is_sent_to_rework(self):
+        log_dir = Path(self.tmp.name) / "logs"
+        process_event(self.conn, body_start(), log_dir=log_dir)
         high_current = self.config["limits"].current_max + 2
-        process_event(self.conn, weld("BODY-TEST", self.points[0], current=high_current))
+        process_event(self.conn, weld("BODY-TEST", self.points[0], current=high_current), log_dir=log_dir)
         for point in self.points[1:]:
-            process_event(self.conn, weld("BODY-TEST", point))
-        process_event(self.conn, complete())
+            process_event(self.conn, weld("BODY-TEST", point), log_dir=log_dir)
+        process_event(self.conn, complete(), log_dir=log_dir)
+
         body = self.conn.execute("SELECT status, parameter_errors FROM bodies WHERE body_id='BODY-TEST'").fetchone()
         self.assertEqual(body["status"], "SELEJT / UTÓMUNKÁRA KÜLDVE")
         self.assertGreater(body["parameter_errors"], 0)
+
+        lines = (log_dir / "production_log.txt").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(sum(" | WELDING FAULT | " in line for line in lines), 1)
+        self.assertTrue(any("Current:" in line and "WELDING FAULT" in line for line in lines))
+        self.assertTrue(any("SENT TO REWORK" in line and "PART REMOVED FROM LINE" in line for line in lines))
+        self.assertFalse(any("Áramerősség" in line or "Hegesztési idő" in line for line in lines))
 
     def test_fault_free_cycles_for_all_models_pass_without_rework(self):
         configs = list_configurations()
@@ -110,29 +118,26 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(body["status"], "MEGFELELŐ")
         self.assertIsNone(queue)
 
-    def test_completed_cycle_writes_per_run_statistics_log(self):
+    def test_completed_cycle_writes_compact_english_txt_lifecycle_log(self):
         log_dir = Path(self.tmp.name) / "logs"
         body_id = "BODY-LOG-TEST"
-        process_event(self.conn, body_start(body_id))
+        process_event(self.conn, body_start(body_id), log_dir=log_dir)
         for point in self.points:
-            process_event(self.conn, weld(body_id, point))
+            process_event(self.conn, weld(body_id, point), log_dir=log_dir)
         process_event(self.conn, complete(body_id), log_dir=log_dir)
 
-        files = list(log_dir.glob("run_*.json"))
-        self.assertEqual(len(files), 1)
-        report = json.loads(files[0].read_text(encoding="utf-8"))
-        self.assertEqual(report["body_id"], body_id)
-        self.assertEqual(report["status"], "MEGFELELŐ")
-        self.assertEqual(report["expected_weld_points"], self.config["expected_count"])
-        self.assertEqual(report["received_unique_expected_points"], self.config["expected_count"])
-        self.assertEqual(report["point_completeness_percent"], 100.0)
-        self.assertFalse(report["rework_required"])
-        self.assertIsNotNone(report["duration_seconds"])
-        self.assertLess(report["duration_seconds"], 100.0)
-        self.assertTrue(report["within_100_second_target"])
-        self.assertEqual(report["target_cycle_seconds"], 100)
-        self.assertTrue((log_dir / "production_summary.json").exists())
-        self.assertEqual(len(list(log_dir.glob("production_*.jsonl"))), 1)
+        log_path = log_dir / "production_log.txt"
+        self.assertTrue(log_path.exists())
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("NEW PART LOADED SUCCESSFULLY", lines[0])
+        self.assertIn(body_id, lines[0])
+        self.assertIn("PART REMOVED FROM LINE", lines[1])
+        self.assertIn("WELDING COMPLETED SUCCESSFULLY", lines[1])
+        self.assertIn(f"Welded points: {self.config['expected_count']}/{self.config['expected_count']}", lines[1])
+        self.assertNotIn("Áramerősség", log_path.read_text(encoding="utf-8"))
+        self.assertEqual(list(log_dir.glob("run_*.json")), [])
+        self.assertEqual(list(log_dir.glob("production_*.jsonl")), [])
 
     def test_rework_state_transitions_are_logged(self):
         process_event(self.conn, body_start())
