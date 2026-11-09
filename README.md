@@ -46,8 +46,8 @@ Ezután nyisd meg a http://localhost:8501 címet. Az automatika nem indul el mag
 ## Háromfüles felület
 
 - **Élő gyártás:** aktuális karosszéria, pontteljesség és színkódolt ponttérkép, indítás/leállítás és sebességszabályzó 100–10 000% között.
-- **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények, mérési napló és utómunka-kezelés. A folyamatparaméterek nem módosíthatók a felületen.
-- **Napló és export:** tartós futás- és alkalmazásnaplók, monitor/dashboard konzolnaplók, dátumozott Excel-jelentés és letöltés.
+- **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények és utómunka-kezelés. A normál hegesztési pontok részletes mérései nem kerülnek a TXT-naplóba.
+- **Production log:** egyetlen angol nyelvű TXT-fájl, letöltéssel. Darabonként rögzíti a betöltést és a gyártósorról történő levételt; külön sor csak hegesztési hibánál és utómunka-állapotváltásnál készül.
 - **Automatizálás:** a 10 modellből a rendszer automatikusan választ, de a gyártási ciklus csak a felhasználó indításával kezdődik. Egy bal oldalfal névleges ciklusideje 95 másodperc, a cél-tartomány 90–100 másodperc; az eredményt minden lezárt ciklusnál mérjük. A két oldalfalciklus közötti 10 másodperces állásidő ettől külön értendő.
 - **Folyamatparaméterek:** a külön teszthiba-injektálás alapértéke 0%, de a kopástól független háttérhiba-valószínűség 0,01% hegesztési pontonként (1:10 000). 118–142 pontos oldalfalon ez matematikailag kb. 1,17–1,41% esélyt jelent legalább egy ilyen eseményre. A szám a projekt szimulációs feltételezése, nem mért ipari hibaarány. A kopásmodell, önkorrekció, hűtés és hegesztőfej-/elektródaegység-csere kódalapú beállítások; kizárólag a `src/factory_settings.py` fájlban módosíthatók.
 - **Utómunka:** a ténylegesen hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont hibának számít, és automatikusan utómunka-sorba kerül.
@@ -77,36 +77,24 @@ Minden modellen 100–150 közötti hegesztési pont szerepel. A tools/generate_
 
 Az SQLite kizárólag futási adatokat tárol: mérési eseményeket, karosszériaállapotokat, feldolgozási hibákat és utómunka-naplót. Nem helyettesíti az Excel-referenciakatalógust.
 
-## Automatikus futásnaplók
+## Production TXT log
 
-Minden lezárt karosszériaciklusról a monitor külön JSON-fájlt ment a `logs` mappába. A jelentés tartalmazza a modellt, a várt és beérkezett pontokat, a teljességi arányt, a paraméterhibákat, a minősítést, az utómunkát és a mért ciklusidőt. Emellett a rendszer napi `production_ÉÉÉÉ-HH-NN.jsonl` eseménynaplót és `production_summary.json` összesítőt frissít. Ezek a generált naplók helyi fájlok, a Git nem követi őket.
+A monitor minden bejegyzést egyetlen, UTF-8 kódolású fájlba ír: `logs/production_log.txt`. A napló teljes egészében angol nyelvű, a dátumot és időt a helyi gép időzónája szerint rögzíti.
 
-Az összesítő adatbázisból számol, így tartalmazhat korábbi verziókból származó futásokat is. A dashboard fő statisztikái az aktuális böngésző-munkamenet új ciklusait külön számolják, a korábbi futások pedig az előzményekben maradnak.
+A napló darabonként az alábbi életciklus-eseményeket rögzíti:
+- `NEW PART LOADED SUCCESSFULLY`: az új darab sikeresen beérkezett és regisztrálva lett.
+- `PART REMOVED FROM LINE | WELDING COMPLETED SUCCESSFULLY`: a darab minden elvárt ponttal, hiba nélkül elkészült és lekerült a sorról.
+- `PART REMOVED FROM LINE | WELDING FAILED | SENT TO REWORK`: a darab hibás lett, levettük a sorról és utómunkára került.
+- `WELDING FAULT`: egy konkrét hegesztési pontnál tényleges hiba történt; a sor tartalmazza a darab- és pontazonosítót, a hiba okát és a mért paramétereket.
+- `REWORK STARTED` és `REWORK COMPLETED | READY FOR RE-INSPECTION`: az utómunka megkezdése és lezárása.
+
+A sikeresen meghegesztett pontok nem kapnak külön naplósort. Egy hibátlan darabról csak a betöltési és a darabszintű befejezési bejegyzés készül; külön pontszintű bejegyzés kizárólag hiba esetén keletkezik. A monitor a pontonkénti MQTT-adatokat továbbra is SQLite-ban tárolja a teljesség és a hegesztési minőség ellenőrzéséhez, de ezeket nem másolja a TXT-fájlba. A dashboard **Production log** füle megjeleníti és letölthetővé teszi ezt az egyetlen TXT-fájlt.
 
 ## Állítható szimulációs sebesség
 
-Az **Élő gyártás** fülön, az indítás/leállítás gomb mellett állítható a szimuláció sebessége **100% és 10 000%** között, 100%-os lépésekkel. Alapértéke 100%. A rendszer a kiválasztott modell eseményszámából számolja az eseményközi várakozást, hogy a teljes eseménysor névlegesen 95 másodperc legyen; ezért az egyes modelleknél az eseményköz kissé eltér. Külön 10 másodperc szünet marad két karosszériaciklus között. 10 000%-nál az eseményközi várakozások nagyjából a századrészükre, a karosszériák közötti szünet pedig 0,1 másodpercre csökken. A kiválasztott sebesség a következő karosszéria-ciklustól lép életbe, és az alkalmazásnaplóban, valamint az Excel-jelentésben is rögzül.
+Az **Élő gyártás** fülön, az indítás/leállítás gomb mellett állítható a szimuláció sebessége **100% és 10 000%** között, 100%-os lépésekkel. Alapértéke 100%. A rendszer a kiválasztott modell eseményszámából számolja az eseményközi várakozást, hogy a teljes eseménysor névlegesen 95 másodperc legyen; ezért az egyes modelleknél az eseményköz kissé eltér. Külön 10 másodperc szünet marad két karosszériaciklus között. 10 000%-nál az eseményközi várakozások nagyjából a századrészükre, a karosszériák közötti szünet pedig 0,1 másodpercre csökken. A kiválasztott sebesség a következő karosszéria-ciklustól lép életbe. A szokásos beállításváltozások nem kerülnek bele a darab- és hibaközpontú TXT-naplóba.
 
 A 10 000% a szimulátor késleltetéseinek skálázását jelenti, nem garantál százszoros tényleges áteresztőképességet: a tényleges ciklusidőt az MQTT QoS 1 visszaigazolásai, a gép teljesítménye, az operációs rendszer és az adatbázis-feldolgozás is korlátozza. Minden ciklusnál ténylegesen mérjük az időt, és 100 másodperc alatt tekintjük a ciklust célon belülinek. A célérték a bal oldalfalra vonatkozik, nem egy teljes járműkarosszériára. Az automata az MQTT-broker visszaigazolásai után a monitor adatbázisában is megvárja a karosszéria végleges minősítését. Ha a monitor 30 másodpercen belül nem véglegesít, vagy bármilyen ciklusküldési/feldolgozási hiba történik, a gyártási folyamat biztonsági okból leállítja a további küldést, és hibát naplóz ahelyett, hogy korlátlanul felhalmozná az eseményeket. A hiba elhárítása után az operátor kézzel indíthatja újra.
-
-## Kijelentkezés, Excel-értékelés és teljes napló
-
-A dashboard jobb felső **Kijelentkezés + Excel** gombja dátum- és időbélyeggel ellátott XLSX-jelentést készít a `logs/exports` mappába, és letölthetővé teszi a böngészőben. Az export létrehozása **nem függ attól, hogy az automatika magától leáll-e**: a program először elmenti az aktuális állapotot, majd megkísérli a gyártási szál rendezett leállítását, és frissíti a munkafüzetet, ha újabb adatok érkeztek.
-
-Ha valamelyik adatlapon túllépné az Excel 1 048 576 soros korlátját, a jelentés több számozott munkalapra bontja az adatokat, és egyetlen sort sem hagy ki.
-
-A jelentés munkalapjai többek között:
-- `Összesítő`: darabszámok, megfelelési és selejtarány, ciklusidők, hibák és utómunka.
-- `Modellenként`: modellenkénti minőségi eredmények és időadatok.
-- `Karosszériák` és `Hegesztési adatok`: **az összes elérhető SQLite-rekord**, nem csupán a képernyőn látható sorok.
-- `Utómunka sor`, `Utómunka műveletek`, `Rendszerhibák`: utómunka- és hibabejegyzések.
-- `Futásnaplók`, `Napi JSONL`, `Összesített JSON`, `Alkalmazás-napló`, `Konzolnapló`: ciklus- és programnaplók.
-- `Beállítások`: a jelentéskészítéskor kiválasztott hibaarány, hibamód és sebesség.
-
-A **Napló és export** fül az adatbázis összes karosszéria-, hegesztési pont-, utómunka- és rendszerhiba-bejegyzését, a JSON/JSONL naplókat, az alkalmazásnaplót, a monitor/dashboard konzolnaplókat és a már mentett Excel-exportok listáját jeleníti meg. A gombnyomások, hibabeállítás-változások, karosszériánként használt hibaarányok, ciklusidők és indítási/leállítási kérések napi alkalmazásnaplóba íródnak. Az indítószkript a monitor és a dashboard kimenetét is a logs/monitor.log és logs/dashboard.log fájlokba irányítja. A mérési adatok SQLite-ban, a lezárt ciklusok JSON/JSONL-fájlokban folyamatosan megmaradnak akkor is, ha a kezelőfelület váratlanul bezáródik.
-
-Az Excel-fájlok helye helyi futtatáskor: `logs/exports/BODYLINE_jelentes_ÉÉÉÉ-HH-NN_ÓÓ-PP-MP_ffffff.xlsx`.
-
 
 ## Elektródakopás, hűtés, önkorrekció és eszközcsere
 
@@ -114,7 +102,7 @@ A fejlesztési ág kopási indexet, (I^2 t) alapú szintetikus hőbeviteli köze
 
 Az elektródakopás a karosszériaciklusok között is megmarad, és a `data/equipment_state.json` fájlban újraindítás után is folytatódik. A kódalapú beállítás 100 lezárt bal oldalfal után indít egy **szimulált műszakszüneti karbantartási pontot** (kb. 14 000 hegesztési pont 140 pont/oldalfal mellett). Az intervallum elérése után a hegesztőfej/elektródaegység cseréje a következő karosszériák közötti állásidőben történik; a régi egység állapota naplózódik, majd az új egység kopása 0%-ról indul. A csere a rendelkezésre álló szünetből fogyaszt időt; hosszabb csere esetén az állásidő is hosszabb. Ez a szimuláció ciklusszám alapján közelíti a karbantartási szünetet, nem modellez konkrét vállalati műszak- vagy pihenőidő-naptárt.
 
-Az Excel-export külön `Kopás és önkorrekció`, `Eszközcsere-napló`, `Paraméter-audit` és `Források` munkalapokat tartalmazza, így a felhasznált hűtési referenciaértékek és az egyedi tanulmányokra vonatkozó korlátozások a jelentésben is visszakereshetők.
+A kopás és az eszközcsere állapota a futás közben a kezelőfelületen követhető. Ezek a normál karbantartási események nem kerülnek a rövid gyártási TXT-naplóba; figyelmeztetés vagy rendszerhiba esetén külön rendszerbejegyzés készül.
 
 **Műszaki korlátozás:** az áramlépés/önkorrekció, kopásráta, csereintervallum, csereidő és a 95%-os minőségi proxy demonstrációs paraméterek, nem hitelesített gyári receptértékek. A hűtés alapértékei a TWI bevonatos/vastagabb acélhoz adott referenciaértékei (6 l/perc, max. 20 °C belépő és 30 °C kilépő), de más anyag-/pisztoly-/hűtőrendszer esetén ezeket az adott berendezés specifikációja szerint kell beállítani. A dashboard referencia-auditja csak széles plausibilitási szűrő; nem helyettesít anyag- és illesztésspecifikus hegesztési tartományvizsgálatot.
 
@@ -124,7 +112,7 @@ A kopástól független hibamódok forrásai: [TWI – hegesztési minőség és
 
     python -m unittest discover -s tests -v
 
-A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést, a monitor véglegesítésére várást, a teljes Excel-exportot és a nagy munkalapok biztonságos darabolását. A GitHub Actions külön, valódi Mosquitto-brokerrel is végigteszteli az MQTT → monitor → SQLite folyamatot hibátlan és szándékosan hibás karosszériával.
+A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést, a monitor véglegesítésére várást, a darabonkénti angol TXT-naplót, a pontszintű hibanaplózást és az utómunka állapotváltásait. A GitHub Actions külön, valódi Mosquitto-brokerrel is végigteszteli az MQTT → monitor → SQLite folyamatot hibátlan és szándékosan hibás karosszériával.
 
 
 ## Ismételt, duplikációmentes indítás
