@@ -58,6 +58,16 @@ try {
         Add-Content -LiteralPath $shutdownLog -Value "Safe-stop timeout reached; terminating remaining project processes." -Encoding UTF8
     }
 
+    # The monitor watches shutdown.request and disconnects cleanly after the final body verdict.
+    $monitorStopped = Join-Path $logDir "monitor.stopped"
+    $monitorWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $monitorStopped) -and $monitorWatch.Elapsed.TotalSeconds -lt 10) {
+        Start-Sleep -Milliseconds 250
+    }
+    if (-not (Test-Path -LiteralPath $monitorStopped)) {
+        Add-Content -LiteralPath $shutdownLog -Value "Monitor clean-stop signal was not received; its service process will be terminated." -Encoding UTF8
+    }
+
     # Stop service wrapper windows first; /T also stops their Python child processes.
     $snapshot = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
     foreach ($process in $snapshot) {
@@ -103,6 +113,7 @@ try {
     }
 
     Remove-Item -LiteralPath (Join-Path $logDir "monitor.ready") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $monitorStopped -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $logDir "dashboard.ready") -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $productionIdle -Force -ErrorAction SilentlyContinue
     Add-ProductionLogLine "ALL BODYLINE SERVICES STOPPED"
