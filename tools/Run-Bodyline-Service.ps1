@@ -13,6 +13,11 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 Set-Location -LiteralPath $ProjectRoot
 $env:PYTHONUNBUFFERED = "1"
 $env:BODYLINE_SERVICE_MARKER = $Marker
+if ($Service -eq "monitor") {
+    $env:BODYLINE_READY_FILE = Join-Path $logDir "monitor.ready"
+} else {
+    Remove-Item Env:BODYLINE_READY_FILE -ErrorAction SilentlyContinue
+}
 
 if (-not (Test-Path -LiteralPath $python)) { throw "Nem talalhato a projekt virtualis kornyezetenek Pythonja: $python" }
 
