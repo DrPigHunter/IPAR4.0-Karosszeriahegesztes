@@ -47,7 +47,8 @@ Ezután nyisd meg a http://localhost:8501 címet. Az automatika nem indul el mag
 
 - **Élő gyártás:** aktuális karosszéria, pontteljesség és színkódolt ponttérkép, indítás/leállítás és sebességszabályzó 100–10 000% között.
 - **Statisztika és utómunka:** megfelelési/selejtarány, modellenkénti eredmények, karosszéria-előzmények és utómunka-kezelés. A normál hegesztési pontok részletes mérései nem kerülnek a TXT-naplóba.
-- **Production log:** egyetlen angol nyelvű TXT-fájl, letöltéssel. Darabonként rögzíti a betöltést és a gyártósorról történő levételt; külön sor csak hegesztési hibánál és utómunka-állapotváltásnál készül.
+- **Production log:** egyetlen angol nyelvű TXT-fájl, letöltéssel és két másodpercenkénti élő frissítéssel. Minden esemény azonnal, lemezre flush-olva kerül bele; darabonként rögzíti a betöltést és a gyártósorról történő levételt, külön sor csak hegesztési hibánál és utómunka-állapotváltásnál készül.
+- **Kilépés és minden leállítása:** a dashboard felső részén található gomb leállítási kérést küld. Az aktuális oldalfal biztonságosan befejeződik, majd a dashboard, az MQTT-monitor és a projekt MQTT-konténere is leáll.
 - **Automatizálás:** a 10 modellből a rendszer automatikusan választ, de a gyártási ciklus csak a felhasználó indításával kezdődik. Egy bal oldalfal névleges ciklusideje 95 másodperc, a cél-tartomány 90–100 másodperc; az eredményt minden lezárt ciklusnál mérjük. A két oldalfalciklus közötti 10 másodperces állásidő ettől külön értendő.
 - **Folyamatparaméterek:** a külön teszthiba-injektálás alapértéke 0%, de a kopástól független háttérhiba-valószínűség 0,01% hegesztési pontonként (1:10 000). 118–142 pontos oldalfalon ez matematikailag kb. 1,17–1,41% esélyt jelent legalább egy ilyen eseményre. A szám a projekt szimulációs feltételezése, nem mért ipari hibaarány. A kopásmodell, önkorrekció, hűtés és hegesztőfej-/elektródaegység-csere kódalapú beállítások; kizárólag a `src/factory_settings.py` fájlban módosíthatók.
 - **Utómunka:** a ténylegesen hiányzó pont, határértéken kívüli paraméter, duplikált vagy váratlan pont hibának számít, és automatikusan utómunka-sorba kerül.
@@ -79,7 +80,7 @@ Az SQLite kizárólag futási adatokat tárol: mérési eseményeket, karosszér
 
 ## Production TXT log
 
-A monitor minden bejegyzést egyetlen, UTF-8 kódolású fájlba ír: `logs/production_log.txt`. A napló teljes egészében angol nyelvű, a dátumot és időt a helyi gép időzónája szerint rögzíti.
+A monitor minden bejegyzést egyetlen, UTF-8 kódolású fájlba ír: `logs/production_log.txt`. A napló teljes egészében angol nyelvű, a dátumot és időt a helyi gép időzónája szerint rögzíti. Minden esemény külön append művelettel, flush és `fsync` után kerül lemezre; nem kell megvárni a program bezárását. A dashboard **Production log** füle két másodpercenként újraolvassa a fájlt, így a napló gyártás közben is követhető.
 
 A napló darabonként az alábbi életciklus-eseményeket rögzíti:
 - `NEW PART LOADED SUCCESSFULLY`: az új darab sikeresen beérkezett és regisztrálva lett.
@@ -88,7 +89,7 @@ A napló darabonként az alábbi életciklus-eseményeket rögzíti:
 - `WELDING FAULT`: egy konkrét hegesztési pontnál tényleges hiba történt; a sor tartalmazza a darab- és pontazonosítót, a hiba okát és a mért paramétereket.
 - `REWORK STARTED` és `REWORK COMPLETED | READY FOR RE-INSPECTION`: az utómunka megkezdése és lezárása.
 
-A sikeresen meghegesztett pontok nem kapnak külön naplósort. Egy hibátlan darabról csak a betöltési és a darabszintű befejezési bejegyzés készül; külön pontszintű bejegyzés kizárólag hiba esetén keletkezik. A monitor a pontonkénti MQTT-adatokat továbbra is SQLite-ban tárolja a teljesség és a hegesztési minőség ellenőrzéséhez, de ezeket nem másolja a TXT-fájlba. A dashboard **Production log** füle megjeleníti és letölthetővé teszi ezt az egyetlen TXT-fájlt.
+A sikeresen meghegesztett pontok nem kapnak külön naplósort. Egy hibátlan darabról csak a betöltési és a darabszintű befejezési bejegyzés készül; külön pontszintű bejegyzés kizárólag hiba esetén keletkezik. A monitor a pontonkénti MQTT-adatokat továbbra is SQLite-ban tárolja a teljesség és a hegesztési minőség ellenőrzéséhez, de ezeket nem másolja a TXT-fájlba. A dashboard **Production log** füle megjeleníti és letölthetővé teszi ezt az egyetlen TXT-fájlt. A leállítási eseményeket is rögzíti: `APPLICATION EXIT REQUESTED` és `ALL BODYLINE SERVICES STOPPED`.
 
 ## Állítható szimulációs sebesség
 
@@ -114,6 +115,17 @@ A kopástól független hibamódok forrásai: [TWI – hegesztési minőség és
 
 A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést, a monitor véglegesítésére várást, a darabonkénti angol TXT-naplót, a pontszintű hibanaplózást és az utómunka állapotváltásait. A GitHub Actions külön, valódi Mosquitto-brokerrel is végigteszteli az MQTT → monitor → SQLite folyamatot hibátlan és szándékosan hibás karosszériával.
 
+
+## Kilépés és teljes leállítás
+
+A dashboard felső részén lévő **Kilépés és minden leállítása** gomb a `tools/Stop-Bodyline.ps1` folyamatot indítja el. A leállítás menete:
+1. A program leállítási kérést jelez a gyártási workernek és az MQTT-monitornak.
+2. Ha egy oldalfal ciklusa éppen fut, a worker befejezi a teljes aktuális ciklust, a monitor elmenti a végleges minősítést, és csak ezután jelzi a biztonságos leállási pontot.
+3. A dashboard és a monitor szolgáltatásfolyamata, valamint a hozzájuk tartozó PowerShell-ablakok leállnak.
+4. A projekt `mqtt` Docker Compose szolgáltatása leáll. A Docker Desktop maga továbbra is futva marad.
+5. A TXT-naplóba bekerül az `ALL BODYLINE SERVICES STOPPED` bejegyzés.
+
+Ha a ciklus 150 másodpercen belül nem jut el biztonságos leállási pontra, a leállító szkript figyelmeztetést ír a naplóba, majd leállítja a projekt szolgáltatásait. A normál leállítás tehát megvárja a folyamatban lévő oldalfalat, a vészleállítás pedig nem hagyja korlátlanul futni a folyamatokat.
 
 ## Ismételt, duplikációmentes indítás
 
