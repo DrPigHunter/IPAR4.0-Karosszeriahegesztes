@@ -354,8 +354,8 @@ def signal_monitor_ready() -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
     temporary.write_text(
-        "status=connected\\n"
-        + f"timestamp={datetime.now().astimezone().isoformat()}\\n",
+        "status=connected\n"
+        + f"timestamp={datetime.now().astimezone().isoformat()}\n",
         encoding="utf-8",
     )
     temporary.replace(target)
