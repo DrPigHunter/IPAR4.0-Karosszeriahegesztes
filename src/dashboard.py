@@ -11,7 +11,6 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -30,7 +29,7 @@ from src.monitor import (
 )
 from src.parameter_audit import build_parameter_audit
 from src import simulator as simulator_module
-from src.report_export import append_application_log, export_production_report, load_all_tables, load_file_logs
+from src.run_logger import LOG_FILE_NAME, write_system_status_log
 from src.speed_control import (
     CYCLE_TARGET_SECONDS, DEFAULT_SPEED_PERCENT, DEFAULT_TARGET_CYCLE_SECONDS,
     MAX_SPEED_PERCENT, MIN_SPEED_PERCENT, base_publish_delay_ms, normalize_speed_percent,
@@ -590,261 +589,55 @@ def start_automatic_production() -> None:
 
 
 def safe_application_log(event: str, details: dict[str, Any] | None = None, level: str = "INFO") -> None:
-    """Best-effort disk-backed app log; a logging issue must not block export."""
+    """Keep routine UI activity out of the part log; persist warnings and errors only."""
+    if level.upper() == "INFO":
+        return
     try:
-        append_application_log(event, details, log_dir=ROOT / "logs", level=level)
+        write_system_status_log(ROOT / "logs", event, level=level)
     except Exception as exc:
-        print(f"Alkalmazásnapló nem írható ({event}): {exc}")
-
-
-def make_excel_export(stop_automatic: bool = False) -> dict[str, Any]:
-    """Persist an Excel snapshot first, independent of whether the production worker stops."""
-    state = st.session_state.get("auto_state", {})
-    stop_event = st.session_state.get("auto_stop_event")
-    worker = st.session_state.get("auto_thread")
-    fault_rate_percent = float(state.get("fault_rate", DEFAULT_FAULT_RATE)) * 100.0
-    fault_mode = str(state.get("fault_mode", "within_limits"))
-    non_wear_defect_probability_percent = float(
-        state.get("non_wear_defect_probability", DEFAULT_NON_WEAR_DEFECT_PROBABILITY)
-    ) * 100.0
-    speed_percent = normalize_speed_percent(state.get("speed_percent", st.session_state.get("speed_percent_input", DEFAULT_SPEED_PERCENT)))
-    wear_enabled = bool(state.get("wear_enabled", True))
-    wear_per_point_percent = float(state.get("wear_per_point_percent", DEFAULT_WEAR_PER_POINT_PERCENT))
-    auto_correct_wear = bool(state.get("auto_correct_wear", True))
-    auto_tool_change_enabled = bool(state.get("auto_tool_change_enabled", True))
-    tool_change_interval_bodies = int(state.get("tool_change_interval_bodies", DEFAULT_TOOL_CHANGE_INTERVAL_BODIES))
-    tool_change_duration_seconds = float(state.get("tool_change_duration_seconds", DEFAULT_TOOL_CHANGE_DURATION_SECONDS))
-    coolant_flow_l_min = float(state.get("coolant_flow_l_min", COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN))
-    coolant_inlet_temp_c = float(state.get("coolant_inlet_temp_c", COOLANT_INLET_TARGET_MAX_C))
-    coolant_outlet_temp_c = float(state.get("coolant_outlet_temp_c", COOLANT_OUTLET_TARGET_MAX_C))
-    session_started_at = st.session_state.get("app_session_started_at")
-    export_time = datetime.now().astimezone()
-
-    if stop_automatic:
-        safe_application_log("logout_requested", {
-            "fault_rate_percent": fault_rate_percent,
-            "fault_mode": fault_mode,
-            "non_wear_defect_probability_percent": round(non_wear_defect_probability_percent, 5),
-            "speed_percent": speed_percent,
-            "electrode_wear_enabled": wear_enabled,
-            "wear_per_point_percent": wear_per_point_percent,
-            "auto_correct_wear": auto_correct_wear,
-            "auto_tool_change_enabled": auto_tool_change_enabled,
-            "tool_change_interval_bodies": tool_change_interval_bodies,
-            "tool_change_duration_seconds": tool_change_duration_seconds,
-            "coolant_flow_l_min": coolant_flow_l_min,
-            "coolant_inlet_temp_c": coolant_inlet_temp_c,
-            "coolant_outlet_temp_c": coolant_outlet_temp_c,
-            "worker_was_alive": bool(worker is not None and worker.is_alive()),
-        })
-        if stop_event is not None:
-            stop_event.set()
-        state["running"] = False
-
-    # Write the first dated workbook immediately. This is not conditional on the
-    # automation thread shutting down, so even a stuck worker cannot block the export.
-    worker_stopped = worker is None or not worker.is_alive()
-    path, data, summary = export_production_report(
-        session_started_at=session_started_at,
-        fault_rate_percent=fault_rate_percent,
-        fault_mode=fault_mode,
-        non_wear_defect_probability_percent=non_wear_defect_probability_percent,
-        automatic_worker_stopped=worker_stopped,
-        speed_percent=speed_percent,
-
-        wear_enabled=wear_enabled,
-
-        wear_per_point_percent=wear_per_point_percent,
-
-        auto_correct_wear=auto_correct_wear,
-        auto_tool_change_enabled=auto_tool_change_enabled,
-        tool_change_interval_bodies=tool_change_interval_bodies,
-
-        tool_change_duration_seconds=tool_change_duration_seconds,
-
-        coolant_flow_l_min=coolant_flow_l_min,
-
-        coolant_inlet_temp_c=coolant_inlet_temp_c,
-
-        coolant_outlet_temp_c=coolant_outlet_temp_c,
-        db_path=DB_PATH,
-        log_dir=ROOT / "logs",
-        export_timestamp=export_time,
-    )
-    safe_application_log("excel_report_created", {
-        "file": str(path),
-        "snapshot": "Első mentés; nem vár az automatikus leállásra.",
-        "session_body_count": summary.get("session_body_count", 0),
-        "session_completed_count": summary.get("session_completed_count", 0),
-        "session_scrap_count": summary.get("session_scrap_count", 0),
-    })
-
-    if stop_automatic and worker is not None and worker.is_alive():
-        # Normal cycles finish in about 13 seconds. Timeout does not cancel the export.
-        worker.join(timeout=20.0)
-    worker_stopped = worker is None or not worker.is_alive()
-    safe_application_log(
-        "logout_export_finalized" if stop_automatic else "excel_export_prepared",
-        {
-            "file": str(path),
-            "automatic_worker_stopped": worker_stopped,
-            "export_remains_valid_if_worker_continues": True,
-        },
-    )
-
-    # Refresh the same timestamped workbook with rows written while the worker stopped.
-    # If this second pass fails, the first successfully written workbook stays available.
-    try:
-        final_path, final_data, final_summary = export_production_report(
-            session_started_at=session_started_at,
-            fault_rate_percent=fault_rate_percent,
-            fault_mode=fault_mode,
-            non_wear_defect_probability_percent=non_wear_defect_probability_percent,
-            automatic_worker_stopped=worker_stopped,
-            speed_percent=speed_percent,
-
-            wear_enabled=wear_enabled,
-
-            wear_per_point_percent=wear_per_point_percent,
-
-            auto_correct_wear=auto_correct_wear,
-            auto_tool_change_enabled=auto_tool_change_enabled,
-            tool_change_interval_bodies=tool_change_interval_bodies,
-
-            tool_change_duration_seconds=tool_change_duration_seconds,
-
-            coolant_flow_l_min=coolant_flow_l_min,
-
-            coolant_inlet_temp_c=coolant_inlet_temp_c,
-
-            coolant_outlet_temp_c=coolant_outlet_temp_c,
-            db_path=DB_PATH,
-            log_dir=ROOT / "logs",
-            export_timestamp=export_time,
-        )
-        path, data, summary = final_path, final_data, final_summary
-    except Exception as exc:
-        safe_application_log("excel_report_refresh_failed", {
-            "file": str(path), "error": str(exc),
-            "note": "The first successfully written Excel snapshot is retained.",
-        }, level="WARNING")
-
-    safe_application_log("excel_report_ready", {
-        "file": str(path),
-        "automatic_worker_stopped": worker_stopped,
-        "all_database_rows_included": True,
-    })
-    return {
-        "path": str(path),
-        "filename": path.name,
-        "data": data,
-        "summary": summary,
-        "automatic_worker_stopped": worker_stopped,
-        "created_at": export_time.isoformat(timespec="seconds"),
-    }
+        print(f"WARNING: could not write system status to production TXT log: {exc}")
 
 
 def render_complete_log_tab() -> None:
-    """Display every persisted record and every log file, not only recent dashboard rows."""
-    st.markdown("## Teljes napló és export")
+    """Show and download the concise English production TXT log."""
+    log_path = ROOT / "logs" / LOG_FILE_NAME
+    st.markdown("## Production log")
     st.caption(
-        "A hegesztési események, karosszériák, utómunka-műveletek és rendszerhibák SQLite-adatbázisba "
-        "kerülnek. A futás- és alkalmazásnaplók fájlba íródnak, így egy váratlan bezárás után is megmaradnak."
+        "The log records each part's arrival and final outcome, plus individual welding faults "
+        "and rework status changes. Normal weld points are not listed one by one."
     )
-    if st.button("⬇  Teljes Excel-jelentés készítése", key="manual_excel_export", type="primary"):
-        try:
-            report = make_excel_export(stop_automatic=False)
-            st.session_state["latest_report"] = report
-            safe_application_log("excel_export_download_available", {"file": report["path"]})
-            st.success(f"Az Excel-jelentés elmentve: {report['filename']}")
-        except Exception as exc:
-            st.error(f"Az Excel-jelentés nem készült el: {exc}")
 
-    latest_report = st.session_state.get("latest_report")
-    if latest_report:
-        st.download_button(
-            "Excel-jelentés letöltése",
-            data=latest_report["data"],
-            file_name=latest_report["filename"],
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_latest_excel_report",
-            use_container_width=True,
-        )
-        summary = latest_report.get("summary", {})
-        s1, s2, s3, s4 = st.columns(4)
-        s1.metric("Munkamenet oldalfalai", int(summary.get("session_body_count", 0)))
-        s2.metric("Lezárt oldalfalak", int(summary.get("session_completed_count", 0)))
-        s3.metric("Megfelelt", int(summary.get("session_pass_count", 0)))
-        s4.metric("Selejtes", int(summary.get("session_scrap_count", 0)))
-
-    try:
-        tables = load_all_tables(DB_PATH)
-        file_logs = load_file_logs(ROOT / "logs")
-    except Exception as exc:
-        st.error(f"A naplók beolvasása közben hiba történt: {exc}")
+    if not log_path.exists():
+        st.info("No production activity has been logged yet.")
         return
 
-    bodies, weld_events = tables["bodies"], tables["weld_events"]
-    rework, actions, errors = tables["rework_queue"], tables["rework_actions"], tables["system_errors"]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Mentett karosszéria", len(bodies))
-    c2.metric("Mentett hegesztési esemény", len(weld_events))
-    c3.metric("Utómunka-művelet", len(actions))
-    c4.metric("Rendszerhiba-bejegyzés", len(errors))
-    st.caption(f"Adatbázis: {DB_PATH} · Excel-exportok: {ROOT / 'logs' / 'exports'}")
+    try:
+        content = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        st.error(f"Could not read the production log: {exc}")
+        return
 
-    with st.expander(f"Karosszéria-rekordok ({len(bodies)})", expanded=False):
-        st.dataframe(bodies, use_container_width=True, hide_index=True, height=320)
-    with st.expander(f"Összes hegesztési pont-esemény ({len(weld_events)})", expanded=False):
-        st.dataframe(weld_events, use_container_width=True, hide_index=True, height=360)
-    with st.expander(f"Összes utómunka-bejegyzés ({len(rework)})", expanded=False):
-        st.dataframe(rework, use_container_width=True, hide_index=True, height=280)
-    with st.expander(f"Összes utómunka-művelet ({len(actions)})", expanded=False):
-        st.dataframe(actions, use_container_width=True, hide_index=True, height=280)
-    with st.expander(f"Összes rendszerhiba ({len(errors)})", expanded=False):
-        st.dataframe(errors, use_container_width=True, hide_index=True, height=280)
-    with st.expander(f"Karosszériánkénti JSON-naplók ({len(file_logs['run_json'])})", expanded=False):
-        if file_logs["run_json"].empty:
-            st.info("Még nincs per-karosszéria JSON-napló.")
-        else:
-            st.dataframe(file_logs["run_json"], use_container_width=True, hide_index=True, height=320)
-    with st.expander(f"Napi JSONL gyártási napló ({len(file_logs['daily_jsonl'])})", expanded=False):
-        if file_logs["daily_jsonl"].empty:
-            st.info("Még nincs napi JSONL-napló.")
-        else:
-            st.dataframe(file_logs["daily_jsonl"], use_container_width=True, hide_index=True, height=320)
-    with st.expander(f"Alkalmazás- és kezelői napló ({len(file_logs['application_log'])})", expanded=False):
-        if file_logs["application_log"].empty:
-            st.info("Még nincs alkalmazásnapló-bejegyzés.")
-        else:
-            st.dataframe(file_logs["application_log"], use_container_width=True, hide_index=True, height=320)
+    lines = content.splitlines()
+    m1, m2 = st.columns(2)
+    m1.metric("Production log entries", len(lines))
+    m2.metric("Welding fault entries", sum(" | WELDING FAULT | " in line for line in lines))
 
-    with st.expander(f"Összesített JSON-napló ({len(file_logs['aggregate_json'])})", expanded=False):
-        if file_logs["aggregate_json"].empty:
-            st.info("Még nincs összesített JSON-napló.")
-        else:
-            st.dataframe(file_logs["aggregate_json"], use_container_width=True, hide_index=True, height=220)
-    with st.expander(f"Monitor/dashboard konzolnaplók ({len(file_logs['console_log'])} sor)", expanded=False):
-        if file_logs["console_log"].empty:
-            st.info("Konzolnapló még nincs. A naplózáshoz a projekt indítószkriptjét használd.")
-        else:
-            st.dataframe(file_logs["console_log"], use_container_width=True, hide_index=True, height=360)
-
-    export_dir = ROOT / "logs" / "exports"
-    export_files = []
-    if export_dir.exists():
-        for item in sorted(export_dir.glob("*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True):
-            export_files.append({
-                "Fájlnév": item.name,
-                "Méret (KB)": round(item.stat().st_size / 1024, 1),
-                "Utoljára mentve": datetime.fromtimestamp(item.stat().st_mtime).astimezone().isoformat(timespec="seconds"),
-                "Elérési út": str(item),
-            })
-    with st.expander(f"Korábbi Excel-exportok ({len(export_files)})", expanded=False):
-        if export_files:
-            st.dataframe(pd.DataFrame(export_files), use_container_width=True, hide_index=True)
-        else:
-            st.info("Még nincs mentett Excel-export.")
+    st.download_button(
+        "Download production_log.txt",
+        data=content.encode("utf-8"),
+        file_name=LOG_FILE_NAME,
+        mime="text/plain; charset=utf-8",
+        key="download_production_txt_log",
+        type="primary",
+        use_container_width=True,
+    )
+    st.text_area(
+        "Latest production activity",
+        value="\n".join(lines[-200:]),
+        height=380,
+        disabled=True,
+    )
+    st.caption(f"Saved locally at: {log_path}")
 
 
 def render_spot_grid(config: dict[str, Any], body_events: pd.DataFrame, completed: bool) -> tuple[int, int, int, int]:
@@ -932,83 +725,19 @@ if "auto_state" not in st.session_state:
 apply_factory_settings(st.session_state["auto_state"])
 st.session_state.setdefault("speed_percent_input", DEFAULT_SPEED_PERCENT)
 
-header_left, header_right = st.columns([5.4, 1.2], vertical_alignment="center")
-with header_left:
-    st.markdown(
-        """
-        <div class="hero">
-          <div>
-            <div class="hero-title">BODYLINE <span style="color:#2457d6">/</span> Oldalfal-hegesztés</div>
-            <div class="hero-sub">Ipar 4.0 · élő gyártási állapot · automatikus modellváltás · MQTT</div>
-          </div>
-          <div class="pill pill-live"><span class="dot"></span> SZIMULÁCIÓS CELLAFELÜGYELET</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-with header_right:
-    if st.session_state.get("logged_out"):
-        st.button("✓  Munkamenet lezárva", key="logged_out_badge", disabled=True, use_container_width=True)
-    elif st.button("⎋  Kijelentkezés + Excel", key="logout_export", type="primary", use_container_width=True):
-        try:
-            # Generate and persist the first Excel snapshot before waiting for any stop.
-            report = make_excel_export(stop_automatic=True)
-            st.session_state["logout_report"] = report
-            st.session_state["logged_out"] = True
-            st.session_state["logout_export_error"] = None
-            st.rerun()
-        except Exception as exc:
-            safe_application_log("logout_export_failed", {"error": str(exc)}, level="ERROR")
-            st.session_state["logout_export_error"] = str(exc)
-            st.error(f"Nem sikerült elkészíteni az Excel-jelentést: {exc}")
+st.markdown(
+    """
+    <div class="hero">
+      <div>
+        <div class="hero-title">BODYLINE <span style="color:#2457d6">/</span> Sidewall Welding</div>
+        <div class="hero-sub">Industry 4.0 · live production status · automatic model selection · MQTT</div>
+      </div>
+      <div class="pill pill-live"><span class="dot"></span> SIMULATION CELL MONITOR</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-if st.session_state.get("logout_export_error") and not st.session_state.get("logged_out"):
-    st.error(
-        "Az export nem készült el. Az adatbázis és a korábbi naplók megmaradnak; "
-        f"próbáld újra a kijelentkezést. Részlet: {st.session_state['logout_export_error']}"
-    )
-
-if st.session_state.get("logged_out"):
-    report = st.session_state.get("logout_report")
-    st.markdown("## A munkamenet lezárult")
-    st.success("A dátummal ellátott Excel-jelentés a lemezre mentve. A letöltéshez kattints az alábbi gombra.")
-    if report:
-        summary = report.get("summary", {})
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Oldalfalak", int(summary.get("session_body_count", 0)))
-        r2.metric("Lezárt karosszériák", int(summary.get("session_completed_count", 0)))
-        r3.metric("Megfelelt", int(summary.get("session_pass_count", 0)))
-        r4.metric("Selejtes", int(summary.get("session_scrap_count", 0)))
-        st.download_button(
-            "⬇  Excel-jelentés letöltése",
-            data=report["data"],
-            file_name=report["filename"],
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_logout_report",
-            type="primary",
-            use_container_width=True,
-        )
-        st.code(report["path"])
-        if report.get("automatic_worker_stopped"):
-            st.caption("Az automatika leállt; a jelentés a leállás utáni utolsó adatokat is tartalmazza.")
-        else:
-            st.warning(
-                "A gyártási szál a várakozási időn belül nem állt le. Az Excel ettől függetlenül elkészült, "
-                "és a mentett adatbázist, valamint az export pillanatában folyamatban lévő oldalfal állapotát is tartalmazza. "
-                "A további események továbbra is a naplófájlokba íródnak."
-            )
-    if st.button("Új munkamenet indítása", key="new_dashboard_session"):
-        st.session_state["app_session_started_at"] = time.time()
-        st.session_state["app_session_id"] = uuid.uuid4().hex
-        st.session_state["logged_out"] = False
-        st.session_state["logout_report"] = None
-        st.session_state["logout_export_error"] = None
-        st.session_state["speed_percent_input"] = DEFAULT_SPEED_PERCENT
-        st.session_state.pop("auto_state", None)
-        st.session_state.pop("auto_thread", None)
-        st.session_state.pop("auto_stop_event", None)
-        st.rerun()
-    st.stop()
 
 production_tab, statistics_tab, log_tab = st.tabs([
     "◉  Élő gyártás", "▦  Statisztika és utómunka", "☷  Napló és export"
@@ -1345,16 +1074,6 @@ def render_statistics_tab() -> None:
             "Duplikált pontok", "started_at", "completed_at",
         ] if c in history]
         st.dataframe(history[cols].head(50), use_container_width=True, hide_index=True, height=250)
-
-    with st.expander("Mérési napló – legutóbbi 100 hegesztés", expanded=False):
-        if events.empty:
-            st.caption("Még nincs mérési adat.")
-        else:
-            cols = [c for c in [
-                "timestamp", "body_id", "config_id", "weld_id", "current_ka",
-                "weld_time_ms", "electrode_force_kn", "errors_json", "duplicate",
-            ] if c in events]
-            st.dataframe(events[cols].head(100), use_container_width=True, hide_index=True, height=300)
 
     with st.expander("Utómunka-eseménynapló", expanded=False):
         if actions.empty:
