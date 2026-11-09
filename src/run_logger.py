@@ -1,13 +1,12 @@
-"""Compact, human-readable production logging: one line per body plus fault details."""
+"""English, human-readable production log: lifecycle events per part and weld faults."""
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-LOG_FILE_NAME = "hegesztesi_naplo.txt"
+LOG_FILE_NAME = "production_log.txt"
 
 
 def _local_timestamp(value: Any = None) -> str:
@@ -15,11 +14,7 @@ def _local_timestamp(value: Any = None) -> str:
     if value:
         try:
             parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.astimezone()
-            else:
-                parsed = parsed.astimezone()
-            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+            return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         except (TypeError, ValueError, OverflowError):
             pass
     return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -37,6 +32,56 @@ def _append_line(log_dir: str | Path, line: str) -> Path:
     return path
 
 
+def _model_name(config: dict[str, Any]) -> str:
+    return " ".join(
+        str(config.get(key) or "").strip()
+        for key in ("brand", "model")
+        if str(config.get(key) or "").strip()
+    ) or str(config.get("label") or "Unknown model")
+
+
+def _english_error(error: Any) -> str:
+    """Translate validation messages into stable English log descriptions."""
+    message = str(error)
+    if message.startswith("Áramerősség:"):
+        detail = message.split(":", 1)[1].strip()
+        if detail.startswith("hiányzó vagy nem numerikus érték"):
+            return "Current: missing or non-numeric value"
+        return f"Current: {detail.replace('kívül esik a', 'is outside the').replace('tartományon', 'range')}"
+    if message.startswith("Hegesztési idő:"):
+        detail = message.split(":", 1)[1].strip()
+        if detail.startswith("hiányzó vagy nem numerikus érték"):
+            return "Weld time: missing or non-numeric value"
+        return f"Weld time: {detail.replace('kívül esik a', 'is outside the').replace('tartományon', 'range')}"
+    if message.startswith("Elektródaerő:"):
+        detail = message.split(":", 1)[1].strip()
+        if detail.startswith("hiányzó vagy nem numerikus érték"):
+            return "Electrode force: missing or non-numeric value"
+        return f"Electrode force: {detail.replace('kívül esik a', 'is outside the').replace('tartományon', 'range')}"
+    if message.startswith("Elektródakopás miatti minőségi eltérés:"):
+        return "Electrode wear-related quality deviation: automatic correction did not reach the simulated target within permitted limits."
+    if message.startswith("Váratlan hegesztési pont:"):
+        return "Unexpected weld point: not listed in the configured weld-point catalog."
+    if message.startswith("Duplikált üzenet:"):
+        return "Duplicate weld event: this point had already been received."
+    return "Weld validation fault: an unclassified validation error was detected."
+
+
+def write_part_loaded_log(
+    log_dir: str | Path,
+    body_id: str,
+    config: dict[str, Any],
+    timestamp: Any = None,
+) -> Path:
+    """Record that a new part was received and registered successfully."""
+    return _append_line(
+        log_dir,
+        f"{_local_timestamp(timestamp)} | NEW PART LOADED SUCCESSFULLY | "
+        f"Part ID: {body_id} | Model: {_model_name(config)} | "
+        f"Weld points expected: {len(config.get('expected_weld_ids', []))}",
+    )
+
+
 def write_weld_error_log(
     log_dir: str | Path,
     event: dict[str, Any],
@@ -47,16 +92,16 @@ def write_weld_error_log(
         return None
 
     parameters = (
-        f"Áram: {event.get('current_ka', '—')} kA, "
-        f"idő: {event.get('weld_time_ms', '—')} ms, "
-        f"elektródaerő: {event.get('electrode_force_kn', '—')} kN"
+        f"Current: {event.get('current_ka', 'N/A')} kA, "
+        f"weld time: {event.get('weld_time_ms', 'N/A')} ms, "
+        f"electrode force: {event.get('electrode_force_kn', 'N/A')} kN"
     )
-    details = "; ".join(str(error) for error in errors)
+    details = "; ".join(_english_error(error) for error in errors)
     line = (
-        f"{_local_timestamp(event.get('timestamp'))} | HEGESZTÉSI HIBA | "
-        f"Darab: {event.get('body_id', 'ismeretlen')} | "
-        f"Pont: {event.get('weld_id', 'ismeretlen')} | "
-        f"Hiba: {details} | {parameters}"
+        f"{_local_timestamp(event.get('timestamp'))} | WELDING FAULT | "
+        f"Part ID: {event.get('body_id', 'unknown')} | "
+        f"Weld point: {event.get('weld_id', 'unknown')} | "
+        f"Fault: {details} | {parameters}"
     )
     return _append_line(log_dir, line)
 
@@ -72,79 +117,86 @@ def write_run_log(
     duration_seconds: float | None,
     log_dir: str | Path,
 ) -> Path:
-    """Write exactly one summary line when a sidewall cycle is completed."""
+    """Record one final part-removal outcome after the monitor completes inspection."""
     body = conn.execute(
-        "SELECT started_at,completed_at,event_count,status FROM bodies WHERE body_id=?",
+        "SELECT completed_at,status FROM bodies WHERE body_id=?",
         (body_id,),
     ).fetchone()
     rework = conn.execute(
-        "SELECT reason,status FROM rework_queue WHERE body_id=?",
+        "SELECT status FROM rework_queue WHERE body_id=?",
         (body_id,),
     ).fetchone()
 
-    expected_set = set(expected_ids)
-    received_expected = len(set(received_ids) & expected_set)
-    expected_count = len(expected_set)
-    status = str(body["status"] if body else "ISMERETLEN")
+    received_expected = len(set(received_ids) & set(expected_ids))
+    expected_count = len(set(expected_ids))
+    status = str(body["status"] if body else "UNKNOWN")
     timestamp = body["completed_at"] if body else None
-    model = " ".join(
-        str(config.get(key) or "").strip()
-        for key in ("brand", "model")
-        if str(config.get(key) or "").strip()
-    ) or str(config.get("part") or "Ismeretlen modell")
+    duration = (
+        f" | Cycle time: {float(duration_seconds):.1f} s"
+        if duration_seconds is not None else ""
+    )
 
     if status == "MEGFELELŐ":
-        duration = (
-            f" | Ciklusidő: {float(duration_seconds):.1f} mp"
-            if duration_seconds is not None else ""
-        )
         line = (
-            f"{_local_timestamp(timestamp)} | SIKERES HEGESZTÉS | "
-            f"Darab: {body_id} | Modell: {model} | "
-            f"Hegesztett pontok: {received_expected}/{expected_count}{duration}"
+            f"{_local_timestamp(timestamp)} | PART REMOVED FROM LINE | "
+            f"WELDING COMPLETED SUCCESSFULLY | Part ID: {body_id} | "
+            f"Model: {_model_name(config)} | Welded points: "
+            f"{received_expected}/{expected_count}{duration}"
         )
         return _append_line(log_dir, line)
-
-    rows = conn.execute(
-        "SELECT weld_id,errors_json FROM weld_events WHERE body_id=? ORDER BY id",
-        (body_id,),
-    ).fetchall()
-    error_points: dict[str, list[str]] = {}
-    for row in rows:
-        try:
-            row_errors = json.loads(row["errors_json"] or "[]")
-        except (TypeError, json.JSONDecodeError):
-            row_errors = ["A pont hibáinak részlete nem olvasható."]
-        if row_errors:
-            point_id = str(row["weld_id"])
-            error_points.setdefault(point_id, [])
-            error_points[point_id].extend(str(item) for item in row_errors)
 
     def short_ids(values: Any, limit: int = 8) -> str:
         items = [str(value) for value in values or []]
         if not items:
-            return "nincs"
+            return "none"
         shown = ", ".join(items[:limit])
-        return f"{shown} (+{len(items) - limit})" if len(items) > limit else shown
+        return f"{shown} (+{len(items) - limit} more)" if len(items) > limit else shown
 
-    problem_parts = [
-        f"Hibás pontok: {len(error_points)}",
-        f"Hiányzó pontok: {short_ids(evaluation.get('missing_ids', []))}",
-        f"Duplikált pontok: {short_ids(evaluation.get('duplicate_ids', []))}",
-        f"Váratlan pontok: {short_ids(evaluation.get('unexpected_ids', []))}",
+    issues = [
+        f"Faulty weld points: {int(parameter_errors)}",
+        f"Missing points: {short_ids(evaluation.get('missing_ids', []))}",
+        f"Unexpected points: {short_ids(evaluation.get('unexpected_ids', []))}",
+        f"Duplicate points: {short_ids(evaluation.get('duplicate_ids', []))}",
+        f"Rework status: {str(rework['status']) if rework else 'not registered'}",
     ]
-    if parameter_errors:
-        problem_parts.append(f"Paraméterhibák: {int(parameter_errors)}")
-    if rework:
-        problem_parts.append(f"Utómunka: {rework['status']}")
-    duration = (
-        f" | Ciklusidő: {float(duration_seconds):.1f} mp"
-        if duration_seconds is not None else ""
-    )
     line = (
-        f"{_local_timestamp(timestamp)} | HIBÁS HEGESZTÉS / UTÓMUNKA | "
-        f"Darab: {body_id} | Modell: {model} | "
-        f"Hegesztett pontok: {received_expected}/{expected_count} | "
-        f"{' | '.join(problem_parts)}{duration}"
+        f"{_local_timestamp(timestamp)} | PART REMOVED FROM LINE | "
+        f"WELDING FAILED | SENT TO REWORK | Part ID: {body_id} | "
+        f"Model: {_model_name(config)} | Welded points: "
+        f"{received_expected}/{expected_count} | {' | '.join(issues)}{duration}"
     )
     return _append_line(log_dir, line)
+
+
+def write_rework_action_log(
+    log_dir: str | Path,
+    body_id: str,
+    action: str,
+    timestamp: Any = None,
+) -> Path:
+    """Record rework progress transitions in English."""
+    if action == "START":
+        message = "REWORK STARTED"
+    elif action == "COMPLETE":
+        message = "REWORK COMPLETED | READY FOR RE-INSPECTION"
+    else:
+        message = "REWORK STATUS UPDATED"
+    return _append_line(
+        log_dir,
+        f"{_local_timestamp(timestamp)} | {message} | Part ID: {body_id}",
+    )
+
+
+def write_system_status_log(
+    log_dir: str | Path,
+    event: str,
+    level: str = "ERROR",
+    timestamp: Any = None,
+) -> Path:
+    """Record only warnings/errors; routine UI activity is intentionally omitted."""
+    label = event.replace("_", " ").strip().upper() or "SYSTEM EVENT"
+    severity = "SYSTEM WARNING" if level.upper() == "WARNING" else "SYSTEM ERROR"
+    return _append_line(
+        log_dir,
+        f"{_local_timestamp(timestamp)} | {severity} | {label}",
+    )
