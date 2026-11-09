@@ -85,7 +85,7 @@ function Stop-ExistingBodylineProcesses {
 
 function Start-BodylineServiceWindow {
     param([ValidateSet("monitor", "dashboard")][string]$Service, [string]$ProjectRoot, [string]$Marker, [string]$Helper)
-    $arguments = '-NoExit -ExecutionPolicy Bypass -File "{0}" -ProjectRoot "{1}" -Service "{2}" -Marker "{3}"' -f $Helper, $ProjectRoot, $Service, $Marker
+    $arguments = '-NoProfile -NoExit -ExecutionPolicy Bypass -File "{0}" -ProjectRoot "{1}" -Service "{2}" -Marker "{3}"' -f $Helper, $ProjectRoot, $Service, $Marker
     return Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
 }
 
