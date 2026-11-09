@@ -15,6 +15,7 @@ $env:PYTHONUNBUFFERED = "1"
 $env:BODYLINE_SERVICE_MARKER = $Marker
 if ($Service -eq "monitor") {
     $env:BODYLINE_READY_FILE = Join-Path $logDir "monitor.ready"
+    $env:BODYLINE_STOPPED_FILE = Join-Path $logDir "monitor.stopped"
     Remove-Item Env:BODYLINE_DASHBOARD_READY_FILE -ErrorAction SilentlyContinue
 } else {
     $env:BODYLINE_DASHBOARD_READY_FILE = Join-Path $logDir "dashboard.ready"
