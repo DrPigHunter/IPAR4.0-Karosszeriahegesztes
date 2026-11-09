@@ -195,6 +195,12 @@ def process_event(
             (param_error_count, body_id),
         )
         conn.commit()
+        if errors and log_dir is not None:
+            try:
+                from src.run_logger import write_weld_error_log
+                write_weld_error_log(log_dir, event, errors)
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"FIGYELEM: a hegesztesi hiba TXT naplozasa nem sikerult: {exc}")
         return
 
     if event_type == "body_complete":
@@ -283,7 +289,7 @@ def process_event(
                     conn, body_id, config, expected_ids, received_ids, result,
                     parameter_errors, duration_seconds, log_dir,
                 )
-                print(f"Futásstatisztika elmentve: {path}")
+                print(f"Hegesztési TXT-napló frissítve: {path}")
             except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
                 print(f"FIGYELEM: a futásnapló mentése nem sikerült: {exc}")
         return
