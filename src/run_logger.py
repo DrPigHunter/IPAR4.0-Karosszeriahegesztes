@@ -220,3 +220,23 @@ def write_system_status_log(
         log_dir,
         f"{_local_timestamp(timestamp)} | {severity} | {label}",
     )
+
+def write_lifecycle_log(
+    log_dir: str | Path,
+    event: str,
+    timestamp: Any = None,
+) -> Path:
+    """Write important application lifecycle events immediately to the production log."""
+    labels = {
+        "application_started": "APPLICATION STARTED",
+        "automatic_production_started": "AUTOMATIC PRODUCTION STARTED",
+        "automatic_production_stop_requested": "AUTOMATIC PRODUCTION STOP REQUESTED",
+        "application_exit_requested": "APPLICATION EXIT REQUESTED",
+        "all_services_stopped": "ALL SERVICES STOPPED",
+    }
+    label = labels.get(str(event), str(event).replace("_", " ").upper())
+    return _append_line(
+        log_dir,
+        f"{_local_timestamp(timestamp)} | SYSTEM STATUS | {label}",
+    )
+
