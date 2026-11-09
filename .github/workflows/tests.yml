@@ -59,7 +59,7 @@ jobs:
           nohup python -u -m src.monitor > logs/ci-monitor.log 2>&1 &
           echo $! > /tmp/bodyline-monitor.pid
           for i in $(seq 1 60); do
-            if grep -q "MQTT monitor csatlakozott" logs/ci-monitor.log; then
+            if grep -q "MQTT monitor connected" logs/ci-monitor.log; then
               echo "Monitor subscribed to MQTT."
               exit 0
             fi
