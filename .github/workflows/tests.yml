@@ -30,16 +30,25 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
+          $files = @(
             (Join-Path $PWD "Start_HegesztesSzimulacio.ps1"),
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | Format-List
-            exit 1
+            (Join-Path $PWD "tools/Run-Bodyline-Service.ps1")
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $file,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              Write-Host "PowerShell parse error in $file"
+              $errors | Format-List
+              exit 1
+            }
           }
-          Write-Host "PowerShell startup script syntax OK."
+          Write-Host "PowerShell startup and service scripts syntax OK."
 
   mqtt-integration:
     runs-on: ubuntu-latest
