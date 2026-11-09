@@ -125,3 +125,15 @@ A kopástól független hibamódok forrásai: [TWI – hegesztési minőség és
     python -m unittest discover -s tests -v
 
 A tesztek ellenőrzik a katalógus szerkezetét, a szimulátor eseménysorát, a paraméterhatárokat, a hiányzó és duplikált pontokat, az automatikus utómunka-kezelést, a 100–10 000%-os sebességskálázást, a sorrendtartó MQTT-küldést, a monitor véglegesítésére várást, a teljes Excel-exportot és a nagy munkalapok biztonságos darabolását. A GitHub Actions külön, valódi Mosquitto-brokerrel is végigteszteli az MQTT → monitor → SQLite folyamatot hibátlan és szándékosan hibás karosszériával.
+
+
+## Ismételt, duplikációmentes indítás
+
+A Start_HegesztesSzimulacio.ps1 indítószkript biztonságosan újrafuttatható:
+- ha az indítás már folyamatban van, a második példány nem indít újabb szolgáltatásokat;
+- ha a BODYLINE dashboard már egészségesen fut ezen a projekten, a szkript újrahasználja, nem nyit új böngészőablakot;
+- a régi, ehhez a projekthez tartozó monitor/dashboard folyamatokat indítás előtt leállítja;
+- a dashboard csak akkor nyitja meg a böngészőt egyszer, ha a http://localhost:8501/_stcore/health ellenőrzése sikeres;
+- sikertelen indításnál nem nyit meg üres böngészőoldalt, hanem a logs/monitor.log és logs/dashboard.log naplókat jelöli meg hibakereséshez.
+
+Ha a localhost:8501 portot egy másik alkalmazás használja, az indítószkript nem indít rá második Streamlit-példányt: jelzi a foglalt portot és a folyamat PID-jét.
