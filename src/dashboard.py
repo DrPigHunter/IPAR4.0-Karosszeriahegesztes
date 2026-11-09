@@ -740,7 +740,7 @@ st.markdown(
 
 
 production_tab, statistics_tab, log_tab = st.tabs([
-    "◉  Élő gyártás", "▦  Statisztika és utómunka", "☷  Napló és export"
+    "◉  Élő gyártás", "▦  Statisztika és utómunka", "☷  Production log"
 ])
 
 
