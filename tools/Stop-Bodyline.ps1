@@ -90,8 +90,14 @@ try {
     # Stop only this project's MQTT service; Docker Desktop itself remains available.
     $docker = Get-Command docker -ErrorAction SilentlyContinue
     if ($null -eq $docker) { throw "Docker command was not found; BODYLINE processes stopped but MQTT container may still be running." }
-    & docker compose stop mqtt 2>&1 | Tee-Object -FilePath $shutdownLog -Append
-    $dockerExitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & docker compose stop mqtt 2>&1 | Tee-Object -FilePath $shutdownLog -Append
+        $dockerExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($dockerExitCode -ne 0) {
         throw "Docker Compose could not stop the BODYLINE MQTT container (exit code $dockerExitCode)."
     }
