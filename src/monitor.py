@@ -153,6 +153,12 @@ def process_event(
             (received_at, body_id),
         )
         conn.commit()
+        if log_dir is not None:
+            try:
+                from src.run_logger import write_part_loaded_log
+                write_part_loaded_log(log_dir, body_id, config, timestamp)
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"WARNING: could not write part-load TXT log: {exc}")
         return
 
     if event_type == "weld_result":
@@ -200,7 +206,7 @@ def process_event(
                 from src.run_logger import write_weld_error_log
                 write_weld_error_log(log_dir, event, errors)
             except (OSError, TypeError, ValueError) as exc:
-                print(f"FIGYELEM: a hegesztesi hiba TXT naplozasa nem sikerult: {exc}")
+                print(f"WARNING: could not write weld-fault TXT log: {exc}")
         return
 
     if event_type == "body_complete":
@@ -289,9 +295,9 @@ def process_event(
                     conn, body_id, config, expected_ids, received_ids, result,
                     parameter_errors, duration_seconds, log_dir,
                 )
-                print(f"Hegesztési TXT-napló frissítve: {path}")
+                print(f"Production TXT log updated: {path}")
             except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
-                print(f"FIGYELEM: a futásnapló mentése nem sikerült: {exc}")
+                print(f"WARNING: could not write completed-part TXT log: {exc}")
         return
 
     if event_type == "rework_action":
@@ -318,6 +324,12 @@ def process_event(
             (body_id, action, note, timestamp),
         )
         conn.commit()
+        if log_dir is not None:
+            try:
+                from src.run_logger import write_rework_action_log
+                write_rework_action_log(log_dir, body_id, str(action), timestamp)
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"WARNING: could not write rework TXT log: {exc}")
         return
 
     log_processing_error(conn, "ISMERETLEN ESEMÉNYTÍPUS", f"Nem támogatott event_type: {event_type!r}", json.dumps(event, ensure_ascii=False))
