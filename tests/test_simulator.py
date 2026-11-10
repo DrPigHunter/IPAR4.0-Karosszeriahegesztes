@@ -15,7 +15,9 @@ from src.simulator import (
 )
 
 
+# A szimulátortesztekkel a pontprogram teljességét és a kontrollált hiba-injektálást ellenőrzöm.
 class SimulatorTests(unittest.TestCase):
+    # A hibamentes eseménysor tartalmazza a kiválasztott modell összes elvárt pontját.
     def test_fault_free_cycle_has_all_model_specific_welds(self):
         for config in list_configurations():
             body_id, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=7, non_wear_defect_probability=0.0)
@@ -28,11 +30,13 @@ class SimulatorTests(unittest.TestCase):
             self.assertTrue(all("simulated_variation" not in event for event in weld_events))
             self.assertEqual(len({event["weld_id"] for event in weld_events}), config["expected_count"])
 
+    # Nulla teszthiba-esélynél ne legyen szándékos paramétereltérés.
     def test_zero_probability_means_no_injected_measurements(self):
         config = list_configurations()[0]
         _, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=19, non_wear_defect_probability=0.0)
         self.assertFalse(any("simulated_variation" in event for event in events))
 
+    # A határon belüli variáció ne eredményezzen paraméterhibát.
     def test_within_limits_variation_remains_acceptable(self):
         config = list_configurations()[0]
         limits = config["limits"]
@@ -47,6 +51,7 @@ class SimulatorTests(unittest.TestCase):
         self.assertTrue(limits.weld_time_min <= event["weld_time_ms"] <= limits.weld_time_max)
         self.assertTrue(limits.force_min <= event["electrode_force_kn"] <= limits.force_max)
 
+    # A határon kívüli mód pontosan egy kiválasztott paramétert léptessen túl.
     def test_outside_limits_variation_exceeds_exactly_one_limit(self):
         config = list_configurations()[0]
         limits = config["limits"]
@@ -64,11 +69,13 @@ class SimulatorTests(unittest.TestCase):
         ]
         self.assertEqual(sum(invalid), 1)
 
+    # A teszthiba valószínűsége ne léphesse át a 0,1%-os felső határt.
     def test_probability_is_limited_to_0_1_percent_per_point(self):
         self.assertEqual(MAX_FAULT_PROBABILITY, 0.001)
         with self.assertRaises(ValueError):
             generate_body_events(list_configurations()[0]["config_id"], fault_rate=0.00101)
 
+    # Alapbeállításban ne legyen operátor által kért teszthiba.
     def test_default_fault_rate_is_zero(self):
         self.assertEqual(DEFAULT_NON_WEAR_DEFECT_PROBABILITY, 0.0001)
         self.assertEqual(MAX_NON_WEAR_DEFECT_PROBABILITY, 0.001)
@@ -78,19 +85,24 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(background_parameter.default, DEFAULT_NON_WEAR_DEFECT_PROBABILITY)
 
 
+    # A külön háttérhiba a kopástól függetlenül is okozhasson felismerhető határérték-túllépést.
     def test_background_defect_probability_creates_non_wear_limit_breach(self):
         config = list_configurations()[0]
 
+        # A véletlenszám-generátor helyettesítője minden futásban előidézi a célzott tesztesetet.
         class AlwaysTriggerRng:
             @staticmethod
+            # A tesztben garantáltan bekapcsolom a hibainjektálást.
             def random():
                 return 0.0
 
             @staticmethod
+            # A variációhoz a teszt által meghatározott értéket adom vissza.
             def uniform(a, b):
                 return (a + b) / 2.0
 
             @staticmethod
+            # Az egyik lehetséges paramétert választom a rögzített tesztesethez.
             def choice(values):
                 return values[0]
 
@@ -109,6 +121,7 @@ class SimulatorTests(unittest.TestCase):
         limits = config["limits"]
         self.assertTrue(any(event["current_ka"] > limits.current_max for event in points))
 
+    # A háttérhiba valószínűségének tartományát is ellenőrzöm.
     def test_background_defect_probability_is_validated(self):
         config = list_configurations()[0]
         with self.assertRaises(ValueError):
