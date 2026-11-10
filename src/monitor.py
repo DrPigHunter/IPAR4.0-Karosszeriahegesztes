@@ -219,7 +219,7 @@ def process_event(
         return
 
     # A lezáró eseménynél az elvárt és tényleges pontlistát, valamint az összes hibajelzést együtt értékelem.
-if event_type == "body_complete":
+    if event_type == "body_complete":
         resolved = _resolve_config(conn, event, body_id)
         if not resolved:
             return
@@ -315,7 +315,7 @@ if event_type == "body_complete":
         return
 
     # Az utómunka kizárólag a megengedett WAITING → IN_PROGRESS → DONE állapotmenetben léphet tovább.
-if event_type == "rework_action":
+    if event_type == "rework_action":
         action, note = event.get("action"), str(event.get("note") or "")
         transitions = {"START": (REWORK_WAITING, REWORK_IN_PROGRESS),
                        "COMPLETE": (REWORK_IN_PROGRESS, REWORK_DONE)}
