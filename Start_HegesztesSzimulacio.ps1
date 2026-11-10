@@ -1,6 +1,7 @@
 #requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
+# A projekt gyökérkönyvtárából építem fel az összes elérési utat, így a szkript máshonnan indítva is ugyanazt a projektet kezeli.
 $root = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
 $venvPython = Join-Path $root ".venv\Scripts\python.exe"
 $helperPath = Join-Path $root "tools\Run-Bodyline-Service.ps1"
@@ -14,6 +15,7 @@ $dashboardUrl = "http://localhost:8501"
 $dashboardHealthUrl = "$dashboardUrl/_stcore/health"
 $dashboardPort = 8501
 
+# A dashboard forrásának lenyomatát ellenőrzöm, így a készenléti jel nem egy korábbi kódfuttatásból marad vissza.
 $sha256 = [System.Security.Cryptography.SHA256]::Create()
 try {
     $rootToken = ([System.BitConverter]::ToString($sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($root)))).Replace("-", "").Substring(0, 12)
@@ -22,10 +24,13 @@ try {
 }
 $serviceMarkerPrefix = "BODYLINE_SERVICE_$rootToken"
 
+# A mutex megakadályozza, hogy dupla kattintásból két párhuzamos BODYLINE szolgáltatáscsomag induljon.
+# Prevent two quick double-clicks from launching two stacks.
 # Prevent two quick double-clicks from launching two stacks.
 $mutex = [System.Threading.Mutex]::new($false, "Local\BODYLINE_START_$rootToken")
 $mutexAcquired = $false
 
+# Akkor tekintem szabadnak a portot, ha rövid TCP-próbával ténylegesen nem érhető el.
 function Test-TcpPort {
     param([string]$HostName, [int]$Port)
     $client = New-Object System.Net.Sockets.TcpClient
@@ -41,6 +46,7 @@ function Test-TcpPort {
     }
 }
 
+# Lekérem, melyik folyamat figyel az adott porton, hogy ne indítsak rá még egy dashboardot.
 function Get-ListenerOwner {
     param([int]$Port)
     try {
@@ -50,10 +56,12 @@ function Get-ListenerOwner {
     return $null
 }
 
+# Egy pillanatképet kérek a futó Windows-folyamatokról, és ebből szűröm ki a BODYLINE-hoz tartozókat.
 function Get-ProcessSnapshot {
     return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
 }
 
+# A Streamlit egészségvégpontján ellenőrzöm, hogy a dashboard válaszol-e.
 function Test-DashboardHealth {
     try {
         $response = Invoke-WebRequest -Uri $dashboardHealthUrl -UseBasicParsing -TimeoutSec 3
@@ -63,6 +71,7 @@ function Test-DashboardHealth {
     }
 }
 
+# Csak az adott projekt gyökérkönyvtárához és Python-környezetéhez tartozó szolgáltatásokat azonosítom.
 function Get-BodylineServiceProcesses {
     param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
     $resultItems = @()
@@ -82,6 +91,7 @@ function Get-BodylineServiceProcesses {
     return @($resultItems)
 }
 
+# A monitorhoz tartozó segédablakokat és árva Python-folyamatokat állítom le, a dashboardot közben békén hagyom.
 function Stop-BodylineMonitorProcesses {
     param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
     $snapshot = Get-ProcessSnapshot
@@ -129,6 +139,9 @@ function Stop-BodylineMonitorProcesses {
     }
 }
 
+# A korábbi BODYLINE-indításból maradt segéd- és Python-folyamatokat takarítom el az új stack indítása előtt.
+# Indítás előtt az előző példány maradványait takarítom el, hogy ne ütközzön port vagy adatbázis-folyamat.
+function Stop-ExistingBodylineProcesses {
 function Stop-ExistingBodylineProcesses {
     param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
 
@@ -170,18 +183,21 @@ function Stop-ExistingBodylineProcesses {
     }
 }
 
+# Külön PowerShell-ablakban indítom a monitort vagy a dashboardot, hogy a naplójuk és állapotuk követhető legyen.
 function Start-BodylineServiceWindow {
     param([ValidateSet("monitor", "dashboard")][string]$Service, [string]$ProjectRoot, [string]$Marker, [string]$Helper)
     $arguments = '-NoProfile -NoExit -ExecutionPolicy Bypass -File "{0}" -ProjectRoot "{1}" -Service "{2}" -Marker "{3}"' -f $Helper, $ProjectRoot, $Service, $Marker
     return Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
 }
 
+# A napló aktuális hosszát mérem, hogy az indítás alatt érkező új sorokat is meg tudjam különböztetni.
 function Get-TextFileLength {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return 0 }
     try { return [System.IO.File]::ReadAllText($Path).Length } catch { return 0 }
 }
 
+# A monitor csak akkor számít késznek, ha létrehozta a kapcsolódott állapotot jelző fájlt.
 function Test-MonitorReadySignal {
     param([string]$ReadyPath)
     if (-not (Test-Path -LiteralPath $ReadyPath)) { return $false }
@@ -193,6 +209,7 @@ function Test-MonitorReadySignal {
     }
 }
 
+# A dashboard kész állapotát a forrás SHA-256 lenyomatához is kötöm.
 function Test-DashboardReadySignal {
     param([string]$ReadyPath, [string]$ExpectedHash)
     if (-not (Test-Path -LiteralPath $ReadyPath)) { return $false }
@@ -204,6 +221,9 @@ function Test-DashboardReadySignal {
     }
 }
 
+# A dashboard egészségét és a forráslenyomatot ismételt ellenőrzéssel várom meg, nem egyetlen pillanatnyi válasz alapján.
+# A dashboard csak akkor tekinthető elindultnak, ha a health végpont és a saját ready fájl is rendben van.
+function Wait-ForDashboardReady {
 function Wait-ForDashboardReady {
     param([string]$ReadyPath, [string]$ExpectedHash, [int]$TimeoutSeconds)
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -221,6 +241,7 @@ function Wait-ForDashboardReady {
 }
 
 
+# Addig várok, amíg a monitor tényleges MQTT-kapcsolatot nem jelez.
 function Wait-ForMonitorReady {
     param([string]$ReadyPath, [int]$TimeoutSeconds)
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -231,6 +252,7 @@ function Wait-ForMonitorReady {
     return $false
 }
 
+# Indítási hiba esetén a napló utolsó sorait írom ki, hogy a probléma helyben diagnosztizálható legyen.
 function Show-LogTail {
     param([string]$Path, [string]$Title)
     Write-Host ""
