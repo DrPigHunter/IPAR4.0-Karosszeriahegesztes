@@ -37,6 +37,7 @@ def complete(body_id="BODY-TEST", config=CONFIG):
             "timestamp": now_iso()}
 
 
+# A monitor tesztjei ideiglenes adatbázisban vizsgálják a pontellenőrzést, a minősítést és az utómunka útvonalát.
 class MonitorIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -48,6 +49,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
+    # Ismételt pontazonosító esetén az oldalfal kerüljön utómunkára.
     def test_duplicate_point_routes_sidewall_to_rework(self):
         process_event(self.conn, body_start())
         process_event(self.conn, weld("BODY-TEST", self.points[0]))
@@ -63,6 +65,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(queue["status"], REWORK_WAITING)
         self.assertIn("Duplikált pontok", queue["reason"])
 
+    # Hiányzó hegesztési pont esetén ne legyen megfelelő a ciklus.
     def test_missing_point_routes_sidewall_to_rework(self):
         process_event(self.conn, body_start())
         for point in self.points[1:]:
@@ -74,6 +77,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads(body["missing_ids_json"]), [self.points[0]["weld_id"]])
         self.assertEqual(queue["body_id"], "BODY-TEST")
 
+    # Határértéken kívüli mérésnél hibát naplózzon, és indítsa el az utómunka-ágat.
     def test_welding_fault_is_logged_in_english_and_part_is_sent_to_rework(self):
         log_dir = Path(self.tmp.name) / "logs"
         process_event(self.conn, body_start(), log_dir=log_dir)
@@ -93,6 +97,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertTrue(any("SENT TO REWORK" in line and "PART REMOVED FROM LINE" in line for line in lines))
         self.assertFalse(any("Áramerősség" in line or "Hegesztési idő" in line for line in lines))
 
+    # Mindegyik katalógusmodell hibátlan pontsorával megfelelő eredményt várok.
     def test_fault_free_cycles_for_all_models_pass_without_rework(self):
         configs = list_configurations()
         for config in configs:
@@ -108,6 +113,7 @@ class MonitorIntegrationTests(unittest.TestCase):
             self.assertEqual(row["status"], "MEGFELELŐ", msg=config["label"])
             self.assertIsNone(queue, msg=config["label"])
 
+    # Hibátlan oldalfal ne kerüljön az utómunka-sorba.
     def test_good_sidewall_does_not_enter_rework(self):
         process_event(self.conn, body_start())
         for point in self.points:
@@ -118,6 +124,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(body["status"], "MEGFELELŐ")
         self.assertIsNone(queue)
 
+    # Ellenőrzöm, hogy a betöltés és a pont-hiba a ciklus lezárása előtt is megjelenik a naplóban.
     def test_part_load_and_weld_fault_are_logged_before_part_completion(self):
         log_dir = Path(self.tmp.name) / "logs"
         log_path = log_dir / "production_log.txt"
@@ -142,6 +149,7 @@ class MonitorIntegrationTests(unittest.TestCase):
             "FOLYAMATBAN",
         )
 
+    # A lezárt ciklushoz rövid, ember által olvasható TXT összesítő készüljön.
     def test_completed_cycle_writes_compact_english_txt_lifecycle_log(self):
         log_dir = Path(self.tmp.name) / "logs"
         body_id = "BODY-LOG-TEST"
@@ -163,6 +171,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(list(log_dir.glob("run_*.json")), [])
         self.assertEqual(list(log_dir.glob("production_*.jsonl")), [])
 
+    # Az utómunka START és COMPLETE átmenetei külön is legyenek naplózva.
     def test_rework_state_transitions_are_logged(self):
         log_dir = Path(self.tmp.name) / "logs"
         process_event(self.conn, body_start(), log_dir=log_dir)
@@ -188,6 +197,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertNotIn("Elkezdve", log_text)
         self.assertNotIn("Javítás kész", log_text)
 
+    # Ismeretlen eseménytípusnál rendszerhibát várok, nem csendes eldobást.
     def test_unknown_event_type_is_logged(self):
         process_event(self.conn, {"event_type": "mystery", "body_id": "BODY-TEST"})
         error = self.conn.execute("SELECT category FROM system_errors").fetchone()
