@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Marker
 )
 
+# A monitor és a dashboard külön szolgáltatásként indul, saját naplóval és readiness-jelzéssel.
 $ErrorActionPreference = "Stop"
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -13,6 +14,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 Set-Location -LiteralPath $ProjectRoot
 $env:PYTHONUNBUFFERED = "1"
 $env:BODYLINE_SERVICE_MARKER = $Marker
+# A monitor és a dashboard külön folyamatot, külön kész állapotfájlt és leállási jelzést kap.
 if ($Service -eq "monitor") {
     $env:BODYLINE_READY_FILE = Join-Path $logDir "monitor.ready"
     $env:BODYLINE_STOPPED_FILE = Join-Path $logDir "monitor.stopped"
