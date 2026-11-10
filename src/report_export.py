@@ -47,6 +47,7 @@ EMPTY_COLUMNS = {
 }
 
 
+# Kiolvasom az adatbázis összes releváns tábláját, mert a teljes riportnak nem csak a képernyőn látható legutóbbi sorokat kell tartalmaznia.
 def load_all_tables(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, pd.DataFrame]:
     """Read every available DB row without the dashboard's recent-record display limits."""
     path = Path(db_path)
@@ -64,6 +65,7 @@ def load_all_tables(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, pd.DataF
     return tables
 
 
+# Egységes rekordlistává alakítom a JSON- és JSONL-fájlokat az Excel-export számára.
 def _read_json_records(paths: list[Path], jsonl: bool = False) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in sorted(paths):
@@ -93,6 +95,7 @@ def _read_json_records(paths: list[Path], jsonl: bool = False) -> list[dict[str,
     return records
 
 
+# Összegyűjtöm a futás-, alkalmazás- és konzolnaplókat, hogy a riport a működés körülményeit is megőrizze.
 def load_file_logs(log_dir: str | Path = DEFAULT_LOG_DIR) -> dict[str, pd.DataFrame]:
     """Load per-body, daily, application, console, and aggregate JSON logs."""
     root = Path(log_dir)
@@ -128,6 +131,7 @@ def load_file_logs(log_dir: str | Path = DEFAULT_LOG_DIR) -> dict[str, pd.DataFr
     }
 
 
+# Az operátori és alkalmazási műveletet azonnal fájlba írom és lemezre ürítem, így leállítás után is visszakereshető.
 def append_application_log(
     event: str,
     details: dict[str, Any] | None = None,
@@ -147,6 +151,7 @@ def append_application_log(
     return path
 
 
+# A dashboard aktuális futásához tartozó rekordokat választom le a korábban megőrzött futásokról.
 def _session_filter(bodies: pd.DataFrame, session_started_at: float | None) -> pd.DataFrame:
     if bodies.empty or "started_at" not in bodies.columns or session_started_at is None:
         return bodies.copy()
@@ -155,10 +160,12 @@ def _session_filter(bodies: pd.DataFrame, session_started_at: float | None) -> p
     return bodies.loc[started >= cutoff - pd.Timedelta(seconds=2)].copy()
 
 
+# Százalékos arányt számítok; üres nevező esetén nullával térek vissza, hogy a riport ne hibázzon.
 def _percent(numerator: int | float, denominator: int | float) -> float:
     return round(100.0 * numerator / denominator, 2) if denominator else 0.0
 
 
+# A futás összesítő KPI-jait és a modellenkénti bontást készítem elő az Excel-jelentéshez.
 def _make_summary(
     tables: dict[str, pd.DataFrame],
     session_started_at: float | None,
@@ -248,6 +255,7 @@ def _make_summary(
     return summary, by_model, info
 
 
+# A ponteseményekből kopási és automatikus korrekciós összesítést állítok össze.
 def _make_wear_summary_frame(events: pd.DataFrame) -> pd.DataFrame:
     """Aggregate electrode-wear and correction details persisted in raw MQTT events."""
     columns = [
@@ -302,6 +310,7 @@ def _make_wear_summary_frame(events: pd.DataFrame) -> pd.DataFrame:
     ])
 
 
+# Az alkalmazásnaplóból külön eszközcsere-naplót készítek.
 def _make_tool_change_frame(application_log: pd.DataFrame) -> pd.DataFrame:
     """Extract automatic and operator-triggered tool changes into a dedicated report sheet."""
     columns = [
@@ -347,6 +356,7 @@ def _make_tool_change_frame(application_log: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+# A riportba kerülő forrásokat és értelmezési megjegyzéseket gyűjtöm össze.
 def _make_sources_frame() -> pd.DataFrame:
     """Give the exported workbook a clear source trail for engineering assumptions."""
     return pd.DataFrame([
@@ -412,6 +422,7 @@ def _make_sources_frame() -> pd.DataFrame:
     ])
 
 
+# Az Excel számára problémás értékeket és adattípusokat teszem biztonságossá.
 def _excel_safe(frame: pd.DataFrame) -> pd.DataFrame:
     """Convert structured Python values to text before passing them to openpyxl."""
     result = frame.copy()
@@ -428,6 +439,7 @@ EXCEL_MAX_ROWS = 1_048_576
 EXCEL_MAX_DATA_ROWS = EXCEL_MAX_ROWS - 1  # reserve row 1 for column headings
 
 
+# A nagy adathalmazokat Excel-munkalapokra bontom úgy, hogy egyetlen rekord se vesszen el.
 def split_long_sheets(
     sheets: dict[str, pd.DataFrame],
     max_data_rows: int = EXCEL_MAX_DATA_ROWS,
@@ -447,6 +459,7 @@ def split_long_sheets(
     return expanded
 
 
+# Az adatbázisból, naplókból és beállításokból dátumozott, több munkalapos Excel-riportot állítok elő.
 def export_production_report(
     session_started_at: float | None,
     fault_rate_percent: float,
@@ -504,6 +517,7 @@ def export_production_report(
         {"Beállítás": "Automatika leállt az exportig", "Érték": bool(automatic_worker_stopped)},
         {"Beállítás": "Megjegyzés", "Érték": "A részletes lapok minden elérhető adatbázisrekordot tartalmaznak, nem csak a képernyőn látható legutóbbi sorokat."},
     ])
+    # Minden adattípust külön munkalapra teszek, hogy az összesítő mellett a részletes adatok is visszakereshetők legyenek.
     sheets = {
         "Összesítő": summary,
         "Modellenként": by_model,
