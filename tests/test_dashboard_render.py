@@ -12,7 +12,9 @@ from streamlit.testing.v1 import AppTest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# A dashboard füsttesztje azt ellenőrzi, hogy a kezelőfelület betölthető és a forrásverzió jelzése is megjelenik.
 class DashboardRenderTests(unittest.TestCase):
+    # A fő nézeteket és az aktuális forráslenyomatot ellenőrzöm automatizáltan.
     def test_dashboard_renders_main_tabs_and_signals_current_source(self):
         with tempfile.TemporaryDirectory() as folder:
             ready_file = Path(folder) / "dashboard.ready"
