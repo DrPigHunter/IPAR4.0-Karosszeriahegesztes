@@ -15,6 +15,7 @@ from src.report_export import append_application_log, export_production_report, 
 from src.simulator import generate_body_events
 
 
+# A riporttesztek az Excel-munkalapok teljességét, nagy táblák bontását és a futási naplók megőrzését vizsgálják.
 class ReportExportTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -27,6 +28,7 @@ class ReportExportTests(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
+    # A tesztadatbázisba egy minimális, lezárt ciklust rögzítek az export kipróbálásához.
     def _record_one_cycle(self):
         config = list_configurations()[0]
         _, events = generate_body_events(config["config_id"], fault_rate=0.0, seed=123, non_wear_defect_probability=0.0)
@@ -34,6 +36,7 @@ class ReportExportTests(unittest.TestCase):
             process_event(self.conn, event, log_dir=self.log_dir)
         return config
 
+    # Nagy táblát több Excel-lapra bontva se veszítsünk el sorokat.
     def test_large_tables_are_split_without_losing_rows(self):
         source = pd.DataFrame({"row_id": list(range(7)), "payload": [f"row-{i}" for i in range(7)]})
         sheets = split_long_sheets({"Hegesztési adatok": source}, max_data_rows=3)
@@ -46,16 +49,19 @@ class ReportExportTests(unittest.TestCase):
         combined = pd.concat(sheets.values(), ignore_index=True)
         pd.testing.assert_frame_equal(combined, source)
 
+    # Rövid táblánál maradjon meg az eredeti munkalapnév.
     def test_short_tables_keep_original_sheet_name(self):
         source = pd.DataFrame({"row_id": [1, 2]})
         sheets = split_long_sheets({"Karosszériák": source}, max_data_rows=3)
         self.assertEqual(list(sheets), ["Karosszériák"])
         pd.testing.assert_frame_equal(sheets["Karosszériák"], source)
 
+    # Érvénytelen sorlimit esetén egyértelmű hibát várok.
     def test_sheet_split_rejects_non_positive_row_limit(self):
         with self.assertRaises(ValueError):
             split_long_sheets({"rows": pd.DataFrame({"x": [1]})}, max_data_rows=0)
 
+    # A jelentés tartalmazza az összesített mutatókat, a részletes táblákat és a naplókat.
     def test_export_contains_evaluation_metrics_all_tables_and_logs(self):
         config = self._record_one_cycle()
         append_application_log(
@@ -112,6 +118,7 @@ class ReportExportTests(unittest.TestCase):
         self.assertTrue(sources["URL"].str.contains("springer.com").any())
         workbook.close()
 
+    # A kopási összesítés és a futás beállításai is kerüljenek be az Excelbe.
     def test_electrode_wear_summary_and_settings_are_exported(self):
         config = list_configurations()[0]
         wear_state = {"wear_percent": 10.0}
@@ -179,6 +186,7 @@ class ReportExportTests(unittest.TestCase):
         self.assertEqual(tool_changes.iloc[0]["Karosszéria-intervallum"], 2)
         self.assertAlmostEqual(tool_changes.iloc[0]["Csere előtti kopás (%)"], 18.5)
 
+    # Az azonos másodpercben készített két export ne írja felül egymást.
     def test_two_exports_with_same_second_keep_distinct_files(self):
         timestamp = datetime(2026, 10, 17, 18, 42, 0, tzinfo=timezone.utc)
         first_path, _, _ = export_production_report(
@@ -203,6 +211,7 @@ class ReportExportTests(unittest.TestCase):
         self.assertTrue(first_path.exists())
         self.assertTrue(second_path.exists())
 
+    # Hiányzó adatbázis mellett is készüljön értelmezhető, üres export.
     def test_export_is_created_even_when_database_does_not_exist(self):
         missing_db = self.root / "not-created-yet.db"
         path, data, info = export_production_report(
