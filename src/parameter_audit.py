@@ -17,6 +17,7 @@ STEEL_REFERENCE_FORCE_MIN_KN = 0.2
 STEEL_REFERENCE_FORCE_MAX_KN = 6.0
 
 
+# A katalógusértékeket szakmai referencia-tartományokhoz hasonlítom egy előzetes hihetőségi szűrésben; ez nem hegesztési eljárásminősítés.
 def build_parameter_audit(configurations: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return catalog measurements plus transparent, broad plausibility-screen findings."""
     rows: list[dict[str, Any]] = []
