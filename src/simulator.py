@@ -35,10 +35,12 @@ NON_WEAR_FAULT_CAUSE_HYPOTHESES = (
 )
 
 
+# UTC időbélyeget adok az eseményekhez, hogy a generálási és fogadási idő később összehasonlítható legyen.
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# A szándékos teszthibát a kiválasztott paraméter határán belülre vagy egy felbontási lépéssel kívülre állítom.
 def _apply_point_variation(
     event: dict[str, Any],
     limits: Any,
@@ -73,6 +75,7 @@ def _apply_point_variation(
         )
 
 
+# A kopástól független, ritka háttérhibát külön jelöléssel injektálom; az okcímke szimulált hipotézis, nem valós gyökérok-diagnózis.
 def _apply_non_wear_process_defect(
     event: dict[str, Any], limits: Any, rng: random.Random
 ) -> None:
@@ -89,6 +92,7 @@ def _apply_non_wear_process_defect(
     event["simulated_failure_cause_hypothesis"] = rng.choice(NON_WEAR_FAULT_CAUSE_HYPOTHESES)
 
 
+# Egy kiválasztott modell teljes oldalfal-eseménysorát állítom elő a katalógus pontlistája, paraméterei és a kopásmodell alapján.
 def generate_body_events(
     config_id: str,
     fault_rate: float = 0.0,
@@ -133,7 +137,8 @@ def generate_body_events(
         "expected_count": len(expected_ids), "timestamp": utc_now(),
     }]
 
-    for point in config["points"]:
+    # Minden katalógus szerinti ponthoz külön, azonosítható eseményt készítek.
+for point in config["points"]:
         # Regular measurements have small natural-looking noise and are clamped inside
         # the model-specific acceptable range. No drop/duplicate/unexpected events are
         # injected by the per-point probability control.
@@ -176,6 +181,7 @@ def generate_body_events(
     return body_id, events
 
 
+# Az eseményeket sorrendben publikálom MQTT-n, és megvárom a QoS 1 üzenetküldés lezárását.
 def publish_events(
     events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: float = 90.0
 ) -> None:
@@ -225,6 +231,7 @@ def publish_events(
         client.disconnect()
 
 
+# A parancssori indításkor kiválasztom a konfigurációt és elindítom az automatizált eseménygenerálást.
 def main() -> None:
     configs = list_configurations()
     labels = {cfg["config_id"]: cfg["label"] for cfg in configs}
