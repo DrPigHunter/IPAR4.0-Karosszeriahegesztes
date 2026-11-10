@@ -8,7 +8,9 @@ from unittest.mock import patch
 from src.monitor import clear_monitor_ready, signal_monitor_ready
 
 
+# A monitor readiness tesztjei az indító szkript felé küldött kész/kapcsolatvesztési jelzéseket ellenőrzik.
 class MonitorReadinessTests(unittest.TestCase):
+    # Sikeres MQTT-kapcsolat után atomikusan jelenjen meg a ready fájl.
     def test_successful_connection_writes_atomic_ready_file(self):
         with tempfile.TemporaryDirectory() as folder:
             ready_file = Path(folder) / "monitor.ready"
@@ -22,6 +24,7 @@ class MonitorReadinessTests(unittest.TestCase):
             self.assertEqual(len(content.splitlines()), 2)
             self.assertFalse(ready_file.with_suffix(".ready.tmp").exists())
 
+    # Kapcsolatvesztéskor a ready fájl tűnjön el.
     def test_disconnect_removes_ready_file(self):
         with tempfile.TemporaryDirectory() as folder:
             ready_file = Path(folder) / "monitor.ready"
@@ -31,6 +34,7 @@ class MonitorReadinessTests(unittest.TestCase):
 
             self.assertFalse(ready_file.exists())
 
+    # Közvetlen tesztfuttatáskor ne legyen kötelező a launcher környezet.
     def test_readiness_signal_is_optional_outside_launcher(self):
         with tempfile.TemporaryDirectory() as folder:
             with patch.dict(os.environ, {}, clear=True):
