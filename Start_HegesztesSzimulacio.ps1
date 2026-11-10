@@ -26,7 +26,6 @@ $serviceMarkerPrefix = "BODYLINE_SERVICE_$rootToken"
 
 # A mutex megakadályozza, hogy dupla kattintásból két párhuzamos BODYLINE szolgáltatáscsomag induljon.
 # Prevent two quick double-clicks from launching two stacks.
-# Prevent two quick double-clicks from launching two stacks.
 $mutex = [System.Threading.Mutex]::new($false, "Local\BODYLINE_START_$rootToken")
 $mutexAcquired = $false
 
@@ -142,7 +141,6 @@ function Stop-BodylineMonitorProcesses {
 # A korábbi BODYLINE-indításból maradt segéd- és Python-folyamatokat takarítom el az új stack indítása előtt.
 # Indítás előtt az előző példány maradványait takarítom el, hogy ne ütközzön port vagy adatbázis-folyamat.
 function Stop-ExistingBodylineProcesses {
-function Stop-ExistingBodylineProcesses {
     param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
 
     $snapshot = Get-ProcessSnapshot
@@ -223,7 +221,6 @@ function Test-DashboardReadySignal {
 
 # A dashboard egészségét és a forráslenyomatot ismételt ellenőrzéssel várom meg, nem egyetlen pillanatnyi válasz alapján.
 # A dashboard csak akkor tekinthető elindultnak, ha a health végpont és a saját ready fájl is rendben van.
-function Wait-ForDashboardReady {
 function Wait-ForDashboardReady {
     param([string]$ReadyPath, [string]$ExpectedHash, [int]$TimeoutSeconds)
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
