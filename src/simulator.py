@@ -138,7 +138,7 @@ def generate_body_events(
     }]
 
     # Minden katalógus szerinti ponthoz külön, azonosítható eseményt készítek.
-for point in config["points"]:
+    for point in config["points"]:
         # Regular measurements have small natural-looking noise and are clamped inside
         # the model-specific acceptable range. No drop/duplicate/unexpected events are
         # injected by the per-point probability control.
