@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, MutableMapping
 
+# Ez a küszöb a modell belső célértéke, nem ipari minősítési szabvány.
 QUALITY_TARGET_PERCENT = 95.0  # Demonstration threshold, not an industry acceptance standard.
 WEAR_HEAT_LOSS_PER_PERCENT = 0.0025  # Synthetic wear penalty; requires calibration against real trials.
 CURRENT_STEP_KA = 0.10  # 0.1 kA current-stepping increment, consistent with a weld-lobe style adjustment scale.
@@ -26,6 +27,7 @@ COOLANT_INLET_TARGET_MAX_C = 20.0
 COOLANT_OUTLET_TARGET_MAX_C = 30.0
 
 
+# Ellenőrzöm és kiegészítem a kopási állapot szótárát, hogy a régebbi vagy részleges mentés se okozzon hiányzó kulcs hibát.
 def ensure_wear_state(state: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
     """Initialize lifetime and current-tool counters without discarding old state."""
     defaults = {
@@ -49,6 +51,7 @@ def ensure_wear_state(state: MutableMapping[str, Any]) -> MutableMapping[str, An
     return state
 
 
+# Megakadályozom, hogy érvénytelen darabszámú elektródacsere-intervallum kerüljön a modellbe.
 def _validate_tool_change_interval(interval_bodies: int) -> int:
     if isinstance(interval_bodies, bool) or not isinstance(interval_bodies, int):
         raise ValueError("Az automatikus eszközcsere-intervallumnak egész karosszériadarab-számnak kell lennie.")
@@ -60,6 +63,7 @@ def _validate_tool_change_interval(interval_bodies: int) -> int:
     return interval_bodies
 
 
+# Új elektródaegységre állítom a pillanatnyi kopást, miközben az élettartam-statisztikát megőrzöm.
 def replace_electrode_tool(
     wear_state: MutableMapping[str, Any],
     *,
@@ -96,6 +100,7 @@ def replace_electrode_tool(
     return change
 
 
+# Megnézem, elérte-e az eszköz a beállított oldalfalciklus-határt, és esedékes-e a csere.
 def replace_tool_if_due(
     wear_state: MutableMapping[str, Any],
     interval_bodies: int = DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
@@ -119,6 +124,7 @@ def replace_tool_if_due(
     return None
 
 
+# A lezárt oldalfalak számát növelem az aktuális elektródaegység élettartam-számlálójában.
 def register_completed_body_for_tool(
     wear_state: MutableMapping[str, Any],
     interval_bodies: int = DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
@@ -150,6 +156,7 @@ def register_completed_body_for_tool(
     return None
 
 
+# A szimulált áram-, idő-, kopás- és hűtési értékekből relatív minőségi proxyindexet számítok.
 def _quality_index(
     event: dict[str, Any],
     point: dict[str, Any],
@@ -175,6 +182,7 @@ def _quality_index(
     return round(100.0 * ratio, 2)
 
 
+# A szimulált hűtővíz-áramlás és hőmérsékletek alapján minősítem a hűtési állapotot.
 def cooling_condition(
     coolant_flow_l_min: float = COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     coolant_inlet_temp_c: float = COOLANT_INLET_TARGET_MAX_C,
@@ -223,6 +231,7 @@ def cooling_condition(
     }
 
 
+# A kopást ciklusról ciklusra halmozom, majd korlátozott áram-/időkorrekcióval próbálom visszaállítani a szimulált célértéket.
 def apply_electrode_wear(
     events: list[dict[str, Any]],
     config: dict[str, Any],
