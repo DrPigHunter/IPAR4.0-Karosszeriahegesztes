@@ -24,6 +24,7 @@ STATE_FIELDS = (
 )
 
 
+# A tartós fájlból visszaállítom az elektróda és az eszköz állapotát, hogy egy dashboard-újraindítás ne nullázza le a kopást.
 def load_equipment_state(path: str | Path = DEFAULT_EQUIPMENT_STATE_PATH) -> dict[str, Any]:
     """Load known wear/tool settings; reject malformed persisted data safely."""
     state_path = Path(path)
@@ -42,6 +43,7 @@ def load_equipment_state(path: str | Path = DEFAULT_EQUIPMENT_STATE_PATH) -> dic
     return result
 
 
+# Biztonságosan, ideiglenes fájlon keresztül mentem az állapotot, hogy félbeszakadt íráskor se maradjon sérült JSON.
 def save_equipment_state(
     state: Mapping[str, Any],
     path: str | Path = DEFAULT_EQUIPMENT_STATE_PATH,
