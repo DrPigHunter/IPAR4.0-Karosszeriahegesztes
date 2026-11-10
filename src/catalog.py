@@ -11,10 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 XLSX_PATH = ROOT / "config" / "welding_catalog.xlsx"
 
 
+# Ezt a kivételt akkor használom, ha a referencia-Excel hiányos vagy belső ellentmondást tartalmaz.
 class CatalogError(RuntimeError):
     """The reference workbook is missing, incomplete, or inconsistent."""
 
 
+# A katalógus celláiból egységesen számmá alakítom az értéket, és itt jelzem az olvashatatlan mezőt.
 def _as_float(row: dict[str, Any], key: str) -> float:
     value = row.get(key)
     try:
@@ -23,6 +25,7 @@ def _as_float(row: dict[str, Any], key: str) -> float:
         raise CatalogError(f"Hiányzó vagy hibás Excel-beállítás: {key}={value!r}") from exc
 
 
+# Beolvasom a két munkalapot, hogy a modelladatok és a pontprogram ugyanabból a verziózott fájlból származzanak.
 def _read_xlsx(path: Path) -> dict[str, list[dict[str, Any]]]:
     try:
         from openpyxl import load_workbook
@@ -52,6 +55,7 @@ def _read_xlsx(path: Path) -> dict[str, list[dict[str, Any]]]:
 
 
 @lru_cache(maxsize=1)
+# Összeállítom a teljes konfigurációs szótárat, közben ellenőrzöm az azonosítókat, pontlistákat és határértékeket.
 def load_catalog() -> dict[str, dict[str, Any]]:
     """Load model/part configs and spot-weld recipes from the GitHub-versioned workbook."""
     if not XLSX_PATH.exists():
@@ -134,11 +138,13 @@ def load_catalog() -> dict[str, dict[str, Any]]:
     return result
 
 
+# A kezelőfelületnek és a riportnak adom vissza a támogatott modellek rövid, áttekinthető listáját.
 def list_configurations() -> list[dict[str, Any]]:
     """Return model/part configurations sorted for the UI."""
     return sorted(load_catalog().values(), key=lambda cfg: (cfg["brand"], cfg["model"], cfg["part"]))
 
 
+# Egy konkrét konfigurációt keresek meg az azonosító alapján; ismeretlen azonosítóval nem engedem folytatni a futást.
 def get_configuration(config_id: str) -> dict[str, Any]:
     """Return one Excel-defined configuration."""
     try:
@@ -147,6 +153,7 @@ def get_configuration(config_id: str) -> dict[str, Any]:
         raise CatalogError(f"Ismeretlen Excel-konfiguráció: {config_id!r}") from exc
 
 
+# A gyorsítótárazott adatokat ürítem, ha fejlesztés vagy teszt közben újra be kell olvasni a katalógust.
 def reload_catalog() -> None:
     """Clear cache after the reference workbook is replaced."""
     load_catalog.cache_clear()
