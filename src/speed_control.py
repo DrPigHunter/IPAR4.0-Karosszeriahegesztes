@@ -10,6 +10,7 @@ DEFAULT_TARGET_CYCLE_SECONDS = 95.0
 CYCLE_TARGET_SECONDS = 100
 
 
+# A kezelőfelületről érkező értéket a támogatott 100–10 000%-os tartományra ellenőrzöm és normalizálom.
 def normalize_speed_percent(value: int | float | str) -> int:
     """Normalize a UI/config value to the supported 100%-10,000% range."""
     try:
@@ -21,6 +22,7 @@ def normalize_speed_percent(value: int | float | str) -> int:
     return max(MIN_SPEED_PERCENT, min(MAX_SPEED_PERCENT, int(round(numeric))))
 
 
+# A modell pontszámából számolom ki az alap eseményközt úgy, hogy a teljes pontsor névlegesen 95 másodperces legyen.
 def base_publish_delay_ms(
     event_count: int,
     target_cycle_seconds: float = DEFAULT_TARGET_CYCLE_SECONDS,
@@ -33,6 +35,7 @@ def base_publish_delay_ms(
     return float(target_cycle_seconds) * 1000.0 / event_count
 
 
+# A névleges eseményközt a kiválasztott szimulációs sebesség alapján skálázom.
 def scaled_publish_delay_ms(base_delay_ms: float, speed_percent: int | float) -> float:
     """Scale the pause between MQTT messages; 100% preserves the existing baseline."""
     if base_delay_ms < 0:
@@ -41,6 +44,7 @@ def scaled_publish_delay_ms(base_delay_ms: float, speed_percent: int | float) ->
     return float(base_delay_ms) * MIN_SPEED_PERCENT / speed
 
 
+# A két oldalfal közötti szünetet is a sebességhez igazítom, külön kezelve a pontok küldési idejétől.
 def scaled_inter_body_pause_seconds(base_pause_seconds: float, speed_percent: int | float) -> float:
     """Scale the idle pause between bodies; 100% preserves the existing baseline."""
     if base_pause_seconds < 0:
