@@ -7,7 +7,9 @@ from src.catalog import list_configurations
 from src.parameter_audit import build_parameter_audit
 
 
+# A paraméteraudit tesztjei a katalógus hihetőségi szűrését ellenőrzik, nem ipari receptminősítést.
 class ParameterAuditTests(unittest.TestCase):
+    # Minden modell kapjon audit sort, amely szűrésként, nem tanúsításként jelöli az eredményt.
     def test_catalog_audit_returns_each_model_and_marks_screening_not_certification(self):
         configs = list_configurations()
         rows = build_parameter_audit(configs)
@@ -21,6 +23,7 @@ class ParameterAuditTests(unittest.TestCase):
             "FELÜLVIZSGÁLAT", "PLAUZIBILIS, NEM IGAZOLT"
         } for row in rows))
 
+    # A túl tág referencia-tartományon kívüli értéket jelezze, de ne írja át a receptet.
     def test_audit_flags_out_of_envelope_current_and_force_without_rewriting_recipe(self):
         original = list_configurations()[0]
         altered = deepcopy(original)
