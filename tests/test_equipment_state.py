@@ -6,7 +6,9 @@ from pathlib import Path
 from src.equipment_state import load_equipment_state, save_equipment_state
 
 
+# Ezek a tesztek a kopási és elektródaállapot fájlba mentését, majd újratöltését vizsgálják.
 class EquipmentStateTests(unittest.TestCase):
+    # Újratöltés után is ugyanazt a kopást és beállításokat várom vissza.
     def test_tool_wear_and_settings_survive_reload(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "data" / "equipment_state.json"
@@ -39,6 +41,7 @@ class EquipmentStateTests(unittest.TestCase):
             self.assertEqual(loaded["coolant_flow_l_min"], 6.0)
             self.assertNotIn("do_not_persist_this", loaded)
 
+    # Hiányzó vagy sérült fájlnál a betöltés biztonságos alapállapotra essen vissza.
     def test_missing_or_malformed_state_file_falls_back_to_empty_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "missing.json"
@@ -46,6 +49,7 @@ class EquipmentStateTests(unittest.TestCase):
             path.write_text("{not-json", encoding="utf-8")
             self.assertEqual(load_equipment_state(path), {})
 
+    # A hibás belső állapotot ne vegyük át érvényes kopási adatként.
     def test_invalid_nested_wear_state_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "equipment_state.json"
