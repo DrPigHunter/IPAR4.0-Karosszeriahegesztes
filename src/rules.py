@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 @dataclass(frozen=True)
+# A három folyamatparaméter elfogadási tartományait egyetlen, változtathatatlan objektumban tartom.
 class Limits:
     current_min: float = 7.0
     current_max: float = 11.0
@@ -14,6 +15,7 @@ class Limits:
 
 DEFAULT_LIMITS = Limits()
 
+# Egy hegesztési pont áram-, idő- és erőértékét ellenőrzöm a kiválasztott konfiguráció határai szerint.
 def validate_event(event: dict[str, Any], limits: Limits = DEFAULT_LIMITS) -> list[str]:
     """Return human-readable deviations for one weld result event."""
     errors: list[str] = []
@@ -26,6 +28,7 @@ def validate_event(event: dict[str, Any], limits: Limits = DEFAULT_LIMITS) -> li
             errors.append(f"{label}: {value} kívül esik a [{low}, {high}] tartományon")
     return errors
 
+# A várt és fogadott pontazonosítókat hasonlítom össze, majd a paraméterhibákkal együtt állítom elő a munkadarab végső státuszát.
 def evaluate_body(expected_ids: list[str], received_ids: list[str], parameter_errors: int) -> dict[str, Any]:
     """Evaluate completeness and duplicate IDs for a completed simulated body."""
     expected, received = set(expected_ids), set(received_ids)
