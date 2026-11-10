@@ -4,6 +4,7 @@ param(
     [ValidateRange(10, 600)][int]$SafeStopTimeoutSeconds = 150
 )
 
+# Először megvárom a gyártás biztonságos leállási pontját, csak utána állítom le a háttérszolgáltatásokat.
 $ErrorActionPreference = "Stop"
 $root = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 $python = Join-Path $root ".venv\Scripts\python.exe"
@@ -11,6 +12,7 @@ $serviceHelper = Join-Path $root "tools\Run-Bodyline-Service.ps1"
 $logDir = Join-Path $root "logs"
 $productionLog = Join-Path $logDir "production_log.txt"
 $shutdownLog = Join-Path $logDir "shutdown.log"
+# A jelzőfájlok különítik el a leállítás kérését a termelés tényleges üresjáratától.
 $shutdownRequest = Join-Path $logDir "shutdown.request"
 $productionIdle = Join-Path $logDir "production_idle.ready"
 
