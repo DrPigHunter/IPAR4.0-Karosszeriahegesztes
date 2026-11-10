@@ -10,6 +10,7 @@ from src.monitor import connect_db
 from src.monitor_wait import MonitorCompletionTimeout, wait_for_body_completion
 
 
+# A várakozási tesztek azt biztosítják, hogy a publisher ne tekintse lezártnak a ciklust a monitor végső SQLite-státusza előtt.
 class MonitorWaitTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -26,6 +27,7 @@ class MonitorWaitTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    # A várakozás addig tartson, amíg a monitor végleges állapotot nem ment.
     def test_waits_until_monitor_persists_terminal_status(self):
         def finish_body():
             time.sleep(0.05)
@@ -44,6 +46,7 @@ class MonitorWaitTests(unittest.TestCase):
         self.assertEqual(result["duration_seconds"], 12.0)
         self.assertEqual(result["body_id"], "BODY-WAIT")
 
+    # Már lezárt oldalfalnál ne legyen felesleges várakozás.
     def test_returns_immediately_if_monitor_already_finalized_body(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -54,6 +57,7 @@ class MonitorWaitTests(unittest.TestCase):
         result = wait_for_body_completion("BODY-WAIT", self.db_path, timeout_seconds=0.5)
         self.assertEqual(result["status"], "SELEJT / UTÓMUNKÁRA KÜLDVE")
 
+    # Elmaradt monitorválasznál egyértelmű időtúllépést kapjak.
     def test_timeout_is_raised_for_missing_monitor_result(self):
         missing_db = Path(self.tmp.name) / "missing.db"
         started = time.monotonic()
@@ -61,6 +65,7 @@ class MonitorWaitTests(unittest.TestCase):
             wait_for_body_completion("BODY-MISSING", missing_db, timeout_seconds=0.04, poll_interval_seconds=0.005)
         self.assertLess(time.monotonic() - started, 0.5)
 
+    # Érvénytelen határidőt és lekérdezési időközt utasítson el.
     def test_invalid_wait_parameters_are_rejected(self):
         with self.assertRaises(ValueError):
             wait_for_body_completion("BODY-WAIT", self.db_path, timeout_seconds=0)
