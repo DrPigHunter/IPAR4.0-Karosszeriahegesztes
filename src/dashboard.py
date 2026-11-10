@@ -129,6 +129,7 @@ except CatalogError as exc:
 CONFIG_BY_ID = {cfg["config_id"]: cfg for cfg in CATALOG}
 
 
+# Az operátori vezérlőműveleteket külön MQTT-eseményként küldöm a monitornak.
 def publish_control_event(event: dict[str, Any]) -> None:
     """Send operator actions through MQTT so the monitor controls state transitions."""
     client = mqtt.Client(
@@ -147,6 +148,7 @@ def publish_control_event(event: dict[str, Any]) -> None:
         client.disconnect()
 
 
+# A dashboard által használt táblákat az SQLite-adatbázisból töltöm be.
 def read_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if not DB_PATH.exists():
         return tuple(pd.DataFrame() for _ in range(5))  # type: ignore[return-value]
@@ -159,6 +161,7 @@ def read_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFram
     return bodies, events, rework, errors, actions
 
 
+# A JSON-szövegben tárolt azonosítólistát kezelhető Python-listává alakítom.
 def json_list(value: Any) -> list[str]:
     try:
         result = json.loads(value or "[]")
@@ -167,6 +170,7 @@ def json_list(value: Any) -> list[str]:
         return []
 
 
+# A kopás- és eszközállapotot minden fontos változás után tartós fájlba mentem.
 def persist_equipment_state(state: dict[str, Any]) -> None:
     """Best-effort durable persistence for equipment state/settings."""
     try:
@@ -175,6 +179,7 @@ def persist_equipment_state(state: dict[str, Any]) -> None:
         safe_application_log("equipment_state_persistence_failed", {"error": str(exc)}, level="WARNING")
 
 
+# Az elektródacsere eseményét az alkalmazásnaplóban rögzítem.
 def log_tool_replacement(
     state: dict[str, Any],
     change: dict[str, Any],
@@ -202,6 +207,8 @@ def log_tool_replacement(
     persist_equipment_state(state)
 
 
+# A háttérszálon egymás után indítom az oldalfalakat, és minden ciklus végén megvárom a monitor végső minősítését.
+# A következő oldalfalat csak az előző monitoroldali véglegesítése után indítom, így a gyorsított futásban sem torlódik fel a feldolgozatlan munka.
 def automatic_production_worker(
     stop_event: threading.Event, state: dict[str, Any], config_ids: list[str]
 ) -> None:
@@ -468,6 +475,7 @@ def automatic_production_worker(
     mark_production_idle_for_shutdown()
 
 
+# A kijelzőn az aktuális dashboard-munkamenet darabjait választom le a teljes előzményről.
 def session_bodies_only(bodies: pd.DataFrame) -> pd.DataFrame:
     """Keep KPIs scoped to this browser session so old failed runs do not skew the new rate."""
     if bodies.empty or "started_at" not in bodies:
@@ -479,6 +487,7 @@ def session_bodies_only(bodies: pd.DataFrame) -> pd.DataFrame:
     return bodies.loc[started_at >= session_start - pd.Timedelta(seconds=2)].copy()
 
 
+# Ellenőrzöm az indítás feltételeit, majd létrehozom a gyártási háttérfolyamatot.
 def start_automatic_production() -> None:
     """Start production only after explicit operator action and tool-life checks."""
     old_thread = st.session_state.get("auto_thread")
@@ -594,6 +603,7 @@ def start_automatic_production() -> None:
     })
 
 
+# A dashboard saját naplózását úgy hívom meg, hogy egy naplózási hiba ne szakítsa meg a kezelőfelületet.
 def safe_application_log(event: str, details: dict[str, Any] | None = None, level: str = "INFO") -> None:
     """Log important process lifecycle events and all warnings/errors immediately."""
     lifecycle_events = {
@@ -612,6 +622,7 @@ def safe_application_log(event: str, details: dict[str, Any] | None = None, leve
         print(f"WARNING: could not write system status to production TXT log: {exc}")
 
 
+# Jelzem a leállító folyamatnak, hogy a háttérben már nem fut gyártási ciklus.
 def mark_production_idle_for_shutdown() -> None:
     """Signal that the active sidewall cycle has safely reached a stop point."""
     logs = ROOT / "logs"
@@ -628,6 +639,8 @@ def mark_production_idle_for_shutdown() -> None:
         print(f"WARNING: could not write production-idle shutdown signal: {exc}")
 
 
+# Leállítási kérést küldök; az aktuális oldalfal biztonságos lezárása után a többi szolgáltatás is leáll.
+# Előbb leállítási kérést küldök, és a PowerShell leállító szkript végzi el a szolgáltatások rendezett leállítását.
 def request_full_shutdown() -> None:
     """Stop production at a safe cycle boundary and then stop every BODYLINE service."""
     logs = ROOT / "logs"
@@ -691,6 +704,7 @@ def request_full_shutdown() -> None:
 
 
 @st.fragment(run_every="2s")
+# A folyamatosan frissülő production TXT naplót jelenítem meg, és letöltést biztosítok hozzá.
 def render_complete_log_tab() -> None:
     """Show and download the concise English production TXT log."""
     log_path = ROOT / "logs" / LOG_FILE_NAME
@@ -733,6 +747,7 @@ def render_complete_log_tab() -> None:
     st.caption(f"Saved locally at: {log_path}")
 
 
+# A kiválasztott modell pontlistájából és a beérkezett eseményekből rajzolom meg az oldalfal hegesztési ponttérképét.
 def render_spot_grid(config: dict[str, Any], body_events: pd.DataFrame, completed: bool) -> tuple[int, int, int, int]:
     """Render a concise visual overview instead of a tall per-weld table."""
     latest_by_id: dict[str, pd.Series] = {}
@@ -844,6 +859,7 @@ production_tab, statistics_tab, log_tab = st.tabs([
 
 
 @st.fragment(run_every="1s")
+# Az élő gyártási nézetet építem fel az aktuális munkadarab, a pontteljesség és a sebességszabályozó adataival.
 def render_production_tab() -> None:
     all_bodies, events, all_rework, errors, actions = read_tables()
     bodies = session_bodies_only(all_bodies)
@@ -1035,6 +1051,7 @@ def render_production_tab() -> None:
 
 
 @st.fragment(run_every="2s")
+# A korábbi ciklusok statisztikáit, a hibás darabokat és az utómunka állapotát jelenítem meg.
 def render_statistics_tab() -> None:
     all_bodies, all_events, all_rework, all_errors, all_actions = read_tables()
     bodies = session_bodies_only(all_bodies)
@@ -1199,6 +1216,7 @@ with log_tab:
     render_complete_log_tab()
 
 
+# A dashboard csak sikeres indulás és egészségellenőrzés után jelzi az indító szkriptnek, hogy elérhető.
 def signal_dashboard_ready() -> None:
     """Tell the launcher that this exact dashboard source rendered successfully."""
     ready_file = os.environ.get("BODYLINE_DASHBOARD_READY_FILE")
