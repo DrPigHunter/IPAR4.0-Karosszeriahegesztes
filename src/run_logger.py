@@ -10,6 +10,7 @@ from typing import Any
 LOG_FILE_NAME = "production_log.txt"
 
 
+# A naplóbejegyzéseket a számítógép helyi időzónájában jelenítem meg, hogy a kezelő a saját órájával tudja összevetni.
 def _local_timestamp(value: Any = None) -> str:
     """Format an ISO timestamp in the computer's local time zone."""
     if value:
@@ -21,6 +22,7 @@ def _local_timestamp(value: Any = None) -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
+# Egyetlen naplóbejegyzést fűzök a fájl végére, és azonnal kiíratom a pufferből.
 def _append_line(log_dir: str | Path, line: str) -> Path:
     """Append one durable UTF-8 text record to the single production log."""
     target = Path(log_dir)
@@ -33,6 +35,7 @@ def _append_line(log_dir: str | Path, line: str) -> Path:
     return path
 
 
+# A katalógusrekordból ember által olvasható gyártó- és modellnevet állítok elő.
 def _model_name(config: dict[str, Any]) -> str:
     return " ".join(
         str(config.get(key) or "").strip()
@@ -41,6 +44,7 @@ def _model_name(config: dict[str, Any]) -> str:
     ) or str(config.get("label") or "Unknown model")
 
 
+# A belső hibaüzeneteket rövid, egységes angol megfogalmazásra alakítom a production TXT naplóban.
 def _english_error(error: Any) -> str:
     """Translate validation messages into stable English log descriptions."""
     message = str(error)
@@ -68,6 +72,7 @@ def _english_error(error: Any) -> str:
     return "Weld validation fault: an unclassified validation error was detected."
 
 
+# Rögzítem, mikor és milyen modellű oldalfal érkezett a gyártási folyamatba.
 def write_part_loaded_log(
     log_dir: str | Path,
     body_id: str,
@@ -83,6 +88,7 @@ def write_part_loaded_log(
     )
 
 
+# Csak a hibás hegesztési pontról írok részletes sort, így a normál pontok nem árasztják el a szöveges naplót.
 def write_weld_error_log(
     log_dir: str | Path,
     event: dict[str, Any],
@@ -107,6 +113,7 @@ def write_weld_error_log(
     return _append_line(log_dir, line)
 
 
+# A lezárt oldalfalról összesítő bejegyzést készítek a pontteljességgel, hibákkal és ciklusidővel.
 def write_run_log(
     conn,
     body_id: str,
@@ -159,6 +166,7 @@ def write_run_log(
         if row_errors:
             error_points.add(str(row["weld_id"]))
 
+    # Hosszú azonosítólistát rövidítek, hogy a napló olvasható maradjon.
     def short_ids(values: Any, limit: int = 8) -> str:
         items = [str(value) for value in values or []]
         if not items:
@@ -188,6 +196,7 @@ def write_run_log(
     return _append_line(log_dir, line)
 
 
+# Az utómunka START és COMPLETE állapotváltozását külön naplózom.
 def write_rework_action_log(
     log_dir: str | Path,
     body_id: str,
@@ -207,6 +216,7 @@ def write_rework_action_log(
     )
 
 
+# A rendszer indulási, leállítási és általános állapotüzeneteit rögzítem.
 def write_system_status_log(
     log_dir: str | Path,
     event: str,
@@ -221,6 +231,7 @@ def write_system_status_log(
         f"{_local_timestamp(timestamp)} | {severity} | {label}",
     )
 
+# A munkadarab életciklusának rövid eseményeit a production naplóhoz adom.
 def write_lifecycle_log(
     log_dir: str | Path,
     event: str,
