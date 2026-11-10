@@ -48,6 +48,7 @@ FACTORY_EQUIPMENT_SETTINGS: dict[str, Any] = {
 }
 
 
+# A kódban rögzített oktatási alapbeállításokat alkalmazom; ezek nem minősített ipari hegesztési receptek.
 def apply_factory_settings(state: MutableMapping[str, Any]) -> None:
     """Replace saved/legacy process settings with the code-defined defaults.
 
