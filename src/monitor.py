@@ -24,6 +24,7 @@ REWORK_IN_PROGRESS = "UTÓMUNKA FOLYAMATBAN"
 REWORK_DONE = "UTÓMUNKA ELVÉGEZVE – ÚJRAELLENŐRZÉS SZÜKSÉGES"
 
 
+# Létrehozom vagy megnyitom a futási SQLite-adatbázist, és előkészítem a szükséges táblákat.
 def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     """Runtime DB stores observations, run history, and rework only—not reference recipes."""
     target = Path(db_path) if db_path is not None else DB_PATH
@@ -76,6 +77,7 @@ def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+# A feldolgozhatatlan üzeneteket is eltárolom, hogy az adatút hibái később visszakereshetők legyenek.
 def log_processing_error(
     conn: sqlite3.Connection, category: str, detail: str, raw_payload: str = ""
 ) -> None:
@@ -87,6 +89,7 @@ def log_processing_error(
     conn.commit()
 
 
+# Elmentem az oldalfal azonosítóját és az induláskor érvényes konfiguráció elvárt pontlistáját.
 def _ensure_body(
     conn: sqlite3.Connection, body_id: str, config_id: str,
     config: dict[str, Any], timestamp: str,
@@ -100,6 +103,7 @@ def _ensure_body(
     )
 
 
+# Az eseményben kapott konfigurációt ellenőrzöm a verziózott Excel-katalógussal, és elutasítom az eltérő vagy ismeretlen azonosítót.
 def _resolve_config(conn: sqlite3.Connection, event: dict[str, Any], body_id: str) -> tuple[str, dict[str, Any]] | None:
     """Resolve config from event, falling back to the already registered body run."""
     config_id = str(event.get("config_id") or "").strip()
@@ -125,6 +129,7 @@ def _resolve_config(conn: sqlite3.Connection, event: dict[str, Any], body_id: st
     return config_id, config
 
 
+# Itt fut össze a monitor fő logikája: az eseménytípus alapján pontot ellenőrzök, ciklust zárok, vagy utómunka-állapotot módosítok.
 def process_event(
     conn: sqlite3.Connection, event: dict[str, Any], received_at: float | None = None,
     log_dir: str | Path | None = None,
@@ -213,7 +218,8 @@ def process_event(
                 print(f"WARNING: could not write weld-fault TXT log: {exc}")
         return
 
-    if event_type == "body_complete":
+    # A lezáró eseménynél az elvárt és tényleges pontlistát, valamint az összes hibajelzést együtt értékelem.
+if event_type == "body_complete":
         resolved = _resolve_config(conn, event, body_id)
         if not resolved:
             return
@@ -308,7 +314,8 @@ def process_event(
                 print(f"WARNING: could not write completed-part TXT log: {exc}")
         return
 
-    if event_type == "rework_action":
+    # Az utómunka kizárólag a megengedett WAITING → IN_PROGRESS → DONE állapotmenetben léphet tovább.
+if event_type == "rework_action":
         action, note = event.get("action"), str(event.get("note") or "")
         transitions = {"START": (REWORK_WAITING, REWORK_IN_PROGRESS),
                        "COMPLETE": (REWORK_IN_PROGRESS, REWORK_DONE)}
@@ -343,6 +350,7 @@ def process_event(
     log_processing_error(conn, "ISMERETLEN ESEMÉNYTÍPUS", f"Nem támogatott event_type: {event_type!r}", json.dumps(event, ensure_ascii=False))
 
 
+# Csak sikeres MQTT-kapcsolat után jelzem az indítónak, hogy a monitor fogadásra kész.
 def signal_monitor_ready() -> None:
     """Atomically signal successful MQTT connection to the PowerShell launcher."""
     import os
@@ -361,6 +369,7 @@ def signal_monitor_ready() -> None:
     temporary.replace(target)
 
 
+# Kapcsolatvesztéskor eltávolítom a kész állapot jelzését, hogy az indító ne tekintse aktívnak a monitort.
 def clear_monitor_ready() -> None:
     """Remove the ready signal after an MQTT disconnect."""
     import os
@@ -373,6 +382,7 @@ def clear_monitor_ready() -> None:
             pass
 
 
+# Elindítom a feliratkozó folyamatot, felépítem a broker-kapcsolatot, majd biztonságos leállításig figyelem az üzeneteket.
 def main() -> None:
     conn = connect_db()
     try:
@@ -385,6 +395,7 @@ def main() -> None:
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="welding-monitor")
 
+    # A broker visszajelzése után feliratkozom a hegesztési események témájára, és jelzem a kapcsolat állapotát.
     def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
         if reason_code == 0:
             client.subscribe(TOPIC, qos=1)
@@ -394,10 +405,12 @@ def main() -> None:
             clear_monitor_ready()
             print(f"MQTT connection error: {reason_code}")
 
+    # A kapcsolat megszűnését naplózom, és törlöm a monitor kész állapotát.
     def on_disconnect(client: mqtt.Client, userdata: Any, disconnect_flags: Any, reason_code: Any, properties: Any) -> None:
         clear_monitor_ready()
         print(f"MQTT monitor disconnected: {reason_code}")
 
+    # A MQTT payloadot JSON-ként értelmezem, majd a közös eseményfeldolgozó függvénynek adom át.
     def on_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage) -> None:
         raw = message.payload.decode("utf-8", errors="replace")
         try:
@@ -413,6 +426,7 @@ def main() -> None:
     shutdown_file = LOG_DIR / "shutdown.request"
     production_idle_file = LOG_DIR / "production_idle.ready"
 
+    # A leállítást csak akkor engedem véglegesíteni, ha a termelés már biztonságos ciklushatárhoz ért.
     def shutdown_is_safe() -> bool:
         # Keep receiving weld events until the active sidewall has a committed final verdict.
         return shutdown_file.exists() and production_idle_file.exists()
