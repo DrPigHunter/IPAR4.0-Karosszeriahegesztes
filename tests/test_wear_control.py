@@ -22,7 +22,9 @@ from src.wear_control import (
 CONFIG = list_configurations()[0]
 
 
+# A kopásmodell tesztjei a felhalmozást, korrekciót, eszközcserét és a hibaútvonalat vizsgálják.
 class ElectrodeWearTests(unittest.TestCase):
+    # Kopás után a vezérlő csak a katalógus megengedett paraméterhatárain belül korrigáljon.
     def test_wear_accumulates_and_controller_corrects_inside_catalog_limits(self):
         state = {"wear_percent": 20.0}
         _, events = generate_body_events(
@@ -48,6 +50,7 @@ class ElectrodeWearTests(unittest.TestCase):
                             for event in points))
         self.assertTrue(all(event["process_quality_ok"] for event in points))
 
+    # A kopástól független hiba a korrekció után is maradjon látható.
     def test_background_non_wear_defect_is_not_hidden_by_controller(self):
         point = CONFIG["points"][0]
         event = {
@@ -66,6 +69,7 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertGreater(event["current_ka"], CONFIG["limits"].current_max)
         self.assertEqual(event["auto_correction_steps"], 0)
 
+    # A szándékos határértéksértést az önkorrekció ne fedje el.
     def test_deliberately_injected_limit_fault_is_not_hidden_by_controller(self):
         point = CONFIG["points"][0]
         event = {
@@ -84,6 +88,7 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertFalse(event["process_quality_ok"])
         self.assertEqual(event["auto_correction_steps"], 0)
 
+    # Több egymást követő pont után a kopási állapot folyamatosan növekedjen.
     def test_wear_accumulates_between_calls(self):
         state = {}
         _, first = generate_body_events(
@@ -100,6 +105,7 @@ class ElectrodeWearTests(unittest.TestCase):
         second_points = [e for e in second if e.get("event_type") == "weld_result"]
         self.assertTrue(all(e["electrode_wear_enabled"] for e in second_points))
 
+    # Kikapcsolt kopásnál ne változzon a minőségi proxy és a mérési érték.
     def test_disabled_wear_does_not_change_quality_or_measurements(self):
         base_id, base_events = generate_body_events(CONFIG["config_id"], seed=99, non_wear_defect_probability=0.0)
         _, wear_events = generate_body_events(
@@ -115,6 +121,7 @@ class ElectrodeWearTests(unittest.TestCase):
                          [e["weld_time_ms"] for e in wear_points])
         self.assertTrue(all(e["process_quality_ok"] for e in wear_points))
 
+    # Ha a megengedett korrekció nem elég, a monitor kapjon hibajelzést és utómunka-státuszt.
     def test_uncorrectable_wear_quality_is_detected_and_routed_to_rework(self):
         state = {"wear_percent": 100.0}
         body_id, events = generate_body_events(
@@ -143,6 +150,7 @@ class ElectrodeWearTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    # Az eszközcsere a megadott számú lezárt oldalfal után következzen be.
     def test_automatic_tool_replacement_after_configured_number_of_completed_bodies(self):
         state = ensure_wear_state({
             "wear_percent": 37.5,
@@ -190,6 +198,7 @@ class ElectrodeWearTests(unittest.TestCase):
         # Lifetime metrics remain available; only counters for the replaced tool reset.
         self.assertEqual(state["total_weld_points"], 300)
 
+    # Kikapcsolt automatikus csere mellett a határ elérésekor maradjon kezelhető az állapot.
     def test_disabled_auto_replacement_can_be_enabled_after_tool_life_limit(self):
         state = ensure_wear_state({"wear_percent": 12.0})
         for body_number in range(1, 4):
@@ -215,6 +224,7 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertEqual(state["current_tool_number"], 2)
         self.assertEqual(state["bodies_since_tool_change"], 0)
 
+    # Kézi cserénél a jelenlegi kopás nullázódjon, az élettartam-összesítés viszont maradjon meg.
     def test_manual_tool_replacement_resets_current_wear_but_preserves_lifetime_counts(self):
         state = ensure_wear_state({
             "wear_percent": 55.0,
@@ -236,6 +246,7 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertEqual(state["tool_weld_points"], 0)
         self.assertEqual(state["tool_corrected_points"], 0)
 
+    # A csereintervallum csak érvényes pozitív darabszám lehet.
     def test_tool_change_interval_validation(self):
         state = ensure_wear_state({})
         with self.assertRaises(ValueError):
@@ -243,6 +254,7 @@ class ElectrodeWearTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace_tool_if_due(state, interval_bodies=10_001)
 
+    # A referencia hűtési állapot legyen megfelelő, rosszabb hűtésnél pedig nőjön a kopási stressz.
     def test_reference_cooling_values_are_ok_and_poor_cooling_increases_wear_stress(self):
         normal = cooling_condition(6.0, 20.0, 30.0)
         self.assertEqual(normal["alerts"], [])
@@ -262,18 +274,21 @@ class ElectrodeWearTests(unittest.TestCase):
         self.assertTrue(all(e["cooling_alerts"] for e in points))
         self.assertTrue(all(e["cooling_stress_factor"] > 1.0 for e in points))
 
+    # A fizikailag gyanús hőmérsékletpár kapjon felülvizsgálati jelzést.
     def test_outlet_temperature_below_inlet_is_flagged_for_sensor_review(self):
         result = cooling_condition(6.0, coolant_inlet_temp_c=25.0, coolant_outlet_temp_c=18.0)
         self.assertTrue(any("hidegebb a belépőnél" in alert for alert in result["alerts"]))
         # The inconsistency is flagged; the heuristic does not claim a physical temperature model.
         self.assertGreaterEqual(result["wear_stress_factor"], 1.0)
 
+    # Érvénytelen hűtési értékek ne kerülhessenek a modellbe.
     def test_invalid_cooling_values_are_rejected(self):
         with self.assertRaises(ValueError):
             cooling_condition(-1.0, 20.0, 30.0)
         with self.assertRaises(ValueError):
             cooling_condition(6.0, 90.0, 30.0)
 
+    # A kopási ráta maradjon az elfogadott beállítási tartományban.
     def test_wear_rate_validation(self):
         state = {}
         with self.assertRaises(ValueError):
