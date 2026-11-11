@@ -1,0 +1,37 @@
+@startuml BODYLINE_Deployment
+skinparam componentStyle rectangle
+node "Operátori munkaállomás" as operator_pc {
+  artifact "Böngésző" as browser
+}
+node "BODYLINE alkalmazásgép" as app_pc {
+  component "Streamlit dashboard" as ui
+  component "Python szimulátor / Publisher" as pub
+  component "Python monitor / Subscriber" as sub
+  database "SQLite futásadatbázis" as db
+  artifact "welding_catalog.xlsx" as catalog
+  artifact "equipment_state.json" as state
+}
+node "Helyi hálózat / Docker host" as broker_host {
+  node "Mosquitto Docker konténer" as docker {
+    queue "MQTT broker\nwelding/events · QoS 1" as mqtt
+  }
+}
+browser -- ui : HTTP / localhost:8501
+ui --> pub : indítás, sebesség, stop
+pub --> mqtt : publish JSON
+mqtt --> sub : subscribe JSON
+sub --> db : ellenőrzött események
+catalog --> pub : modell, pontlista, névleges érték
+catalog --> sub : elvárt pontok, határértékek
+ui --> db : lekérdezés / export
+ui --> state : kopás és eszközállapot
+note bottom of app_pc
+  A mérési csatornák virtuálisak:
+  áram (kA), idő (ms), erő (kN).
+  Valós érzékelő nincs csatlakoztatva.
+end note
+note bottom of mqtt
+  Alapértelmezésben a kliens 127.0.0.1:1883 címet használ.
+  BODYLINE_MQTT_HOST/PORT változóval LAN-broker is megadható.
+end note
+@enduml
