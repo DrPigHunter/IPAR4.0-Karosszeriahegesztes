@@ -51,6 +51,17 @@ jobs:
             }
           }
           Write-Host "PowerShell startup and service scripts syntax OK."
+      - name: Package tracked repository files
+        shell: pwsh
+        run: |
+          $tracked = @(git ls-files)
+          Compress-Archive -Path $tracked -DestinationPath BODYLINE_source.zip -CompressionLevel Optimal -Force
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: BODYLINE-source
+          path: BODYLINE_source.zip
+          if-no-files-found: error
 
   mqtt-integration:
     runs-on: ubuntu-latest
