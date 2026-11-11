@@ -13,6 +13,8 @@ import paho.mqtt.client as mqtt
 
 from src.catalog import get_configuration, list_configurations
 from src.factory_settings import DEFAULT_NON_WEAR_DEFECT_PROBABILITY
+from src.network_config import BROKER_HOST, BROKER_PORT, MQTT_TOPIC
+from src.virtual_sensors import attach_virtual_sensor_metadata
 from src.wear_control import (
     COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
     COOLANT_INLET_TARGET_MAX_C,
@@ -21,9 +23,7 @@ from src.wear_control import (
     apply_electrode_wear,
 )
 
-BROKER_HOST = "127.0.0.1"
-BROKER_PORT = 1883
-EVENT_TOPIC = "welding/events"
+EVENT_TOPIC = MQTT_TOPIC
 
 FAULT_MODES = ("within_limits", "outside_limits")
 MAX_FAULT_PROBABILITY = 0.001  # 0.1% per welding point
@@ -152,6 +152,8 @@ def generate_body_events(
                 point["nominal_electrode_force_kn"] + rng.uniform(-0.04, 0.04))), 2),
             "timestamp": utc_now(),
         }
+        # A mérési értékek szimuláltak; a metaadat megnevezi a hozzájuk rendelt virtuális csatornákat.
+        attach_virtual_sensor_metadata(event)
         if fault_rate > 0 and rng.random() < fault_rate:
             _apply_point_variation(event, limits, rng, fault_mode)
         # A second probability is separate from the wear model: even a fresh
