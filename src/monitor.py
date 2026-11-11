@@ -12,12 +12,13 @@ import paho.mqtt.client as mqtt
 
 from src.catalog import CatalogError, get_configuration
 from src.rules import evaluate_body, validate_event
+from src.network_config import BROKER_HOST, BROKER_PORT, MQTT_TOPIC
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "welding.db"
 LOG_DIR = ROOT / "logs"
-BROKER_HOST, BROKER_PORT, TOPIC = "127.0.0.1", 1883, "welding/events"
+TOPIC = MQTT_TOPIC
 
 REWORK_WAITING = "UTÓMUNKÁRA VÁR"
 REWORK_IN_PROGRESS = "UTÓMUNKA FOLYAMATBAN"
