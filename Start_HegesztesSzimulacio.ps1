@@ -301,32 +301,46 @@ try {
     }
     if (-not (Test-Path -LiteralPath $helperPath)) { throw "Hianyzik az inditoszkript segedfajlja: $helperPath. Frissitsd a GitHub-repozitoriumot." }
 
-    Write-Host "[3/5] Docker Desktop es MQTT-broker ellenorzese..." -ForegroundColor Yellow
-    $docker = Get-Command docker -ErrorAction SilentlyContinue
-    if ($null -eq $docker) { throw "A docker parancs nem talalhato. Telepitsd a Docker Desktopot." }
-    & docker info *> $null
-    if ($LASTEXITCODE -ne 0) {
-        $dockerDesktopPaths = @((Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"), (Join-Path $env:LOCALAPPDATA "Programs\Docker\Docker\Docker Desktop.exe"))
-        $dockerDesktopExe = $dockerDesktopPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-        if ($dockerDesktopExe) { Start-Process -FilePath $dockerDesktopExe | Out-Null }
-        else { throw "A Docker Desktop alkalmazas nem talalhato. Inditsd el kezzel." }
-        $dockerReady = $false
-        for ($i = 0; $i -lt 90; $i++) {
-            Start-Sleep -Seconds 2
-            & docker info *> $null
-            if ($LASTEXITCODE -eq 0) { $dockerReady = $true; break }
+    Write-Host "[3/5] MQTT-halozati vegpont ellenorzese..." -ForegroundColor Yellow
+    $brokerHost = if ([string]::IsNullOrWhiteSpace($env:BODYLINE_MQTT_HOST)) { "127.0.0.1" } else { $env:BODYLINE_MQTT_HOST.Trim() }
+    $brokerPort = 1883
+    if (-not [string]::IsNullOrWhiteSpace($env:BODYLINE_MQTT_PORT)) {
+        if (-not [int]::TryParse($env:BODYLINE_MQTT_PORT, [ref]$brokerPort) -or $brokerPort -lt 1 -or $brokerPort -gt 65535) {
+            throw "A BODYLINE_MQTT_PORT erteke 1 es 65535 kozotti egesz szam legyen."
         }
-        if (-not $dockerReady) { throw "A Docker Engine 180 masodperc alatt sem indult el. Ellenorizd a Docker Desktopot es a WSL 2-t." }
+    }
+    if ([string]::IsNullOrWhiteSpace($brokerHost)) { throw "A BODYLINE_MQTT_HOST nem lehet ures." }
+
+    $usesLocalBroker = $brokerHost -in @("127.0.0.1", "localhost", "::1")
+    if ($usesLocalBroker) {
+        $docker = Get-Command docker -ErrorAction SilentlyContinue
+        if ($null -eq $docker) { throw "A helyi MQTT-broker inditasahoz a docker parancs szukseges." }
+        & docker info *> $null
+        if ($LASTEXITCODE -ne 0) {
+            $dockerDesktopPaths = @((Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"), (Join-Path $env:LOCALAPPDATA "Programs\Docker\Docker\Docker Desktop.exe"))
+            $dockerDesktopExe = $dockerDesktopPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if ($dockerDesktopExe) { Start-Process -FilePath $dockerDesktopExe | Out-Null }
+            else { throw "A Docker Desktop alkalmazas nem talalhato. Inditsd el kezzel." }
+            $dockerReady = $false
+            for ($i = 0; $i -lt 90; $i++) {
+                Start-Sleep -Seconds 2
+                & docker info *> $null
+                if ($LASTEXITCODE -eq 0) { $dockerReady = $true; break }
+            }
+            if (-not $dockerReady) { throw "A Docker Engine 180 masodperc alatt sem indult el. Ellenorizd a Docker Desktopot es a WSL 2-t." }
+        }
+        & docker compose up -d mqtt
+        if ($LASTEXITCODE -ne 0) { throw "A helyi MQTT-broker inditasa nem sikerult." }
+    } else {
+        Write-Host ("Kulso LAN MQTT-broker: {0}:{1} (helyi Docker-broker inditasa kihagyva)." -f $brokerHost, $brokerPort) -ForegroundColor Cyan
     }
 
-    & docker compose up -d mqtt
-    if ($LASTEXITCODE -ne 0) { throw "Az MQTT-broker inditasa nem sikerult." }
     $brokerReady = $false
     for ($i = 0; $i -lt 30; $i++) {
-        if (Test-TcpPort -HostName "127.0.0.1" -Port 1883) { $brokerReady = $true; break }
+        if (Test-TcpPort -HostName $brokerHost -Port $brokerPort) { $brokerReady = $true; break }
         Start-Sleep -Seconds 1
     }
-    if (-not $brokerReady) { throw "A localhost:1883 MQTT-port 30 masodperc alatt nem valt elerhetove." }
+    if (-not $brokerReady) { throw ("Az MQTT-broker {0}:{1} vegpontja 30 masodperc alatt nem valt elerhetove." -f $brokerHost, $brokerPort) }
 
     $dashboardSourceHash = (Get-FileHash -LiteralPath $dashboardScript -Algorithm SHA256).Hash.ToLowerInvariant()
     $existingDashboardFound = $false
