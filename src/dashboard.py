@@ -39,6 +39,7 @@ from src.speed_control import (
 )
 from src.monitor_wait import MonitorCompletionTimeout, wait_for_body_completion
 from src.equipment_state import load_equipment_state, save_equipment_state
+from src.virtual_sensors import sensor_catalog, actuator_catalog, operator_interaction_catalog
 from src.factory_settings import (
     DEFAULT_FAULT_RATE,
     DEFAULT_NON_WEAR_DEFECT_PROBABILITY,
@@ -875,6 +876,17 @@ def render_production_tab() -> None:
     with head_left:
         st.markdown("## Gyártócella élő nézete")
         st.caption("Automatikus modellválasztás · MQTT · állítható szimulációs sebesség")
+        with st.expander("Virtuális érzékelők, beavatkozási és kezelői pontok"):
+            st.info(
+                "A mérési csatornák és beavatkozási pontok szoftveresen szimuláltak. "
+                "Fizikai érzékelő vagy aktuátor nincs csatlakoztatva."
+            )
+            st.markdown("**Virtuális érzékelőcsatornák**")
+            st.dataframe(pd.DataFrame(sensor_catalog()), hide_index=True, use_container_width=True)
+            st.markdown("**Logikai beavatkozási pontok**")
+            st.dataframe(pd.DataFrame(actuator_catalog()), hide_index=True, use_container_width=True)
+            st.markdown("**Operátori interakciók**")
+            st.dataframe(pd.DataFrame(operator_interaction_catalog()), hide_index=True, use_container_width=True)
     with head_speed:
         speed_percent = normalize_speed_percent(st.number_input(
             "Szimuláció sebessége (%)",
