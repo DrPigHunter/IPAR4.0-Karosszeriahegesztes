@@ -54,8 +54,8 @@ jobs:
       - name: Package tracked repository files
         shell: pwsh
         run: |
-          $tracked = @(git ls-files)
-          Compress-Archive -Path $tracked -DestinationPath BODYLINE_source.zip -CompressionLevel Optimal -Force
+          git archive --format=zip --output=BODYLINE_source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { throw "A repository ZIP csomagolása nem sikerült." }
       - name: Upload source ZIP
         uses: actions/upload-artifact@v4
         with:
