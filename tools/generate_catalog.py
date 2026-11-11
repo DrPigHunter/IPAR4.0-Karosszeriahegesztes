@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "config" / "welding_catalog.xlsx"
 
 # Counts and process limits are deliberately synthetic educational values—not OEM specs.
+# Ezek a pontszámok és receptértékek oktatási célú szintetikus adatok, nem gyártói előírások.
 MODELS = [
     ("CUPRA", "Terramar", "CT", 118, 7.00, 10.40, 155, 335, 2.60, 4.20),
     ("Audi", "Q8", "Q8", 124, 7.10, 10.60, 160, 340, 2.70, 4.30),
@@ -39,6 +40,7 @@ POINT_HEADERS = [
 ]
 
 
+# Egységes fejlécet, cellaszíneket és oszlopszélességeket adok a generált Excel-munkalapnak.
 def style_sheet(ws) -> None:
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
@@ -53,6 +55,7 @@ def style_sheet(ws) -> None:
         ws.column_dimensions[letter].width = min(max(max_len + 2, 14), 34)
 
 
+# A tíz szintetikus járműkonfigurációból felépítem és elmentem a verziózott hegesztési katalógust.
 def main() -> None:
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     wb = Workbook()

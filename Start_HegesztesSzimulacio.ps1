@@ -1,135 +1,440 @@
 #requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
-$root = $PSScriptRoot
-Set-Location -LiteralPath $root
+# A projekt gyökérkönyvtárából építem fel az összes elérési utat, így a szkript máshonnan indítva is ugyanazt a projektet kezeli.
+$root = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
 $venvPython = Join-Path $root ".venv\Scripts\python.exe"
-$activateScript = Join-Path $root ".venv\Scripts\Activate.ps1"
-
-Write-Host ""
-Write-Host "  BODYLINE | Ipar 4.0 - oldalfal-hegesztes" -ForegroundColor Cyan
-Write-Host "  Projekt: $root" -ForegroundColor DarkGray
-Write-Host ""
-
-# Create the virtual environment once, then reuse it.
-if (-not (Test-Path -LiteralPath $venvPython)) {
-    Write-Host "[1/5] Python virtualis kornyezet letrehozasa..." -ForegroundColor Yellow
-    $py = Get-Command py -ErrorAction SilentlyContinue
-    if ($null -eq $py) {
-        throw "Nem talalhato a Python Launcher (py). Telepits Python 3.11+ verziot, majd inditsd ujra ezt a scriptet."
-    }
-    & py -3 -m venv .venv
-    if ($LASTEXITCODE -ne 0) { throw "A virtualis kornyezet letrehozasa nem sikerult." }
-}
-
-# Install dependencies only when the environment is missing one of the app packages.
-Write-Host "[2/5] Python-csomagok ellenorzese..." -ForegroundColor Yellow
-& $venvPython -c "import streamlit, pandas, openpyxl, paho.mqtt.client"
-if ($LASTEXITCODE -ne 0) {
-    & $venvPython -m pip install --upgrade pip
-    if ($LASTEXITCODE -ne 0) { throw "A pip frissitese nem sikerult." }
-    & $venvPython -m pip install -r (Join-Path $root "requirements.txt")
-    if ($LASTEXITCODE -ne 0) { throw "A fuggosegek telepitese nem sikerult." }
-}
-
-# Docker CLI alone is not enough: Docker Desktop's engine must be running.
-Write-Host "[3/5] Docker Desktop es MQTT-broker ellenorzese..." -ForegroundColor Yellow
-$docker = Get-Command docker -ErrorAction SilentlyContinue
-if ($null -eq $docker) {
-    throw "A docker parancs nem talalhato. Telepitsd a Docker Desktopot, majd inditsd ujra ezt a scriptet."
-}
-
-& docker info *> $null
-if ($LASTEXITCODE -ne 0) {
-    $dockerDesktopPaths = @(
-        (Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"),
-        (Join-Path $env:LOCALAPPDATA "Programs\Docker\Docker\Docker Desktop.exe")
-    )
-    $dockerDesktopExe = $dockerDesktopPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    if ($dockerDesktopExe) {
-        Start-Process -FilePath $dockerDesktopExe | Out-Null
-    } else {
-        throw "A Docker CLI telepitve van, de a Docker Desktop alkalmazas nem talalhato. Inditsd el kezzel a Docker Desktopot."
-    }
-
-    $ready = $false
-    for ($i = 0; $i -lt 60; $i++) {
-        Start-Sleep -Seconds 2
-        & docker info *> $null
-        if ($LASTEXITCODE -eq 0) { $ready = $true; break }
-    }
-    if (-not $ready) {
-        throw "A Docker Engine 120 masodperc alatt sem indult el. Nyisd meg a Docker Desktopot, es ellenorizd a WSL 2 beallitasait."
-    }
-}
-
-& docker compose up -d mqtt
-if ($LASTEXITCODE -ne 0) { throw "Az MQTT-broker nem indult el. Ellenorizd a Docker Desktop allapotat." }
-
-# Stop old monitor/dashboard Python processes from this checkout. Otherwise port 8501
-# or Python's cached modules can keep serving an older version after git pull.
-Write-Host "Regi BODYLINE monitor/dashboard folyamatok leallitasa..." -ForegroundColor Yellow
-$rootNormalized = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
-$staleProcesses = Get-CimInstance Win32_Process | Where-Object {
-    $_.ProcessId -ne $PID -and
-    -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
-    $_.CommandLine.IndexOf($rootNormalized, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-    (($_.CommandLine -match 'src\.monitor') -or
-     ($_.CommandLine -match 'streamlit\s+run\s+src/dashboard\.py'))
-}
-foreach ($process in $staleProcesses) {
-    try {
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-        Write-Host ("Leallitva: PID {0} ({1})" -f $process.ProcessId, $process.Name) -ForegroundColor DarkGray
-    } catch {
-        Write-Host ("A regi PID {0} nem allithato le: {1}" -f $process.ProcessId, $_.Exception.Message) -ForegroundColor DarkYellow
-    }
-}
-Start-Sleep -Seconds 2
-
-# Open the monitor and dashboard in separate PowerShell windows.
-Write-Host "[4/5] Monitor es kezelofelulet inditasa..." -ForegroundColor Yellow
-$quotedRoot = $root.Replace("'", "''")
-$quotedPython = $venvPython.Replace("'", "''")
+$helperPath = Join-Path $root "tools\Run-Bodyline-Service.ps1"
 $logDir = Join-Path $root "logs"
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-$quotedLogDir = $logDir.Replace("'", "''")
-$quotedMonitorLog = (Join-Path $logDir "monitor.log").Replace("'", "''")
-$quotedDashboardLog = (Join-Path $logDir "dashboard.log").Replace("'", "''")
-$monitorCommand = "Set-Location -LiteralPath '$quotedRoot'; New-Item -ItemType Directory -Force -Path '$quotedLogDir' | Out-Null; & '$quotedPython' -u -m src.monitor 2>&1 | Tee-Object -FilePath '$quotedMonitorLog' -Append"
-$dashboardCommand = "Set-Location -LiteralPath '$quotedRoot'; New-Item -ItemType Directory -Force -Path '$quotedLogDir' | Out-Null; & '$quotedPython' -u -m streamlit run src/dashboard.py 2>&1 | Tee-Object -FilePath '$quotedDashboardLog' -Append"
+$monitorLog = Join-Path $logDir "monitor.log"
+$monitorReadyFile = Join-Path $logDir "monitor.ready"
+$dashboardLog = Join-Path $logDir "dashboard.log"
+$dashboardScript = Join-Path $root "src\dashboard.py"
+$dashboardReadyFile = Join-Path $logDir "dashboard.ready"
+$dashboardUrl = "http://localhost:8501"
+$dashboardHealthUrl = "$dashboardUrl/_stcore/health"
+$dashboardPort = 8501
 
-Start-Process -FilePath "powershell.exe" -ArgumentList @(
-    "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $monitorCommand
-) | Out-Null
-Start-Sleep -Seconds 2
-Start-Process -FilePath "powershell.exe" -ArgumentList @(
-    "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $dashboardCommand
-) | Out-Null
+# A dashboard forrásának lenyomatát ellenőrzöm, így a készenléti jel nem egy korábbi kódfuttatásból marad vissza.
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $rootToken = ([System.BitConverter]::ToString($sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($root)))).Replace("-", "").Substring(0, 12)
+} finally {
+    $sha256.Dispose()
+}
+$serviceMarkerPrefix = "BODYLINE_SERVICE_$rootToken"
 
-Write-Host "[5/5] A dashboard egeszsegi allapotanak ellenorzese..." -ForegroundColor Yellow
-$dashboardReady = $false
-for ($i = 0; $i -lt 45; $i++) {
+# A mutex megakadályozza, hogy dupla kattintásból két párhuzamos BODYLINE szolgáltatáscsomag induljon.
+# Prevent two quick double-clicks from launching two stacks.
+$mutex = [System.Threading.Mutex]::new($false, "Local\BODYLINE_START_$rootToken")
+$mutexAcquired = $false
+
+# Akkor tekintem szabadnak a portot, ha rövid TCP-próbával ténylegesen nem érhető el.
+function Test-TcpPort {
+    param([string]$HostName, [int]$Port)
+    $client = New-Object System.Net.Sockets.TcpClient
     try {
-        $health = Invoke-WebRequest -Uri "http://localhost:8501/_stcore/health" -UseBasicParsing -TimeoutSec 2
-        if ($health.StatusCode -eq 200 -and $health.Content -match "ok") {
-            $dashboardReady = $true
-            break
-        }
+        $async = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne(500)) { return $false }
+        $client.EndConnect($async)
+        return $true
     } catch {
-        # Streamlit may need a few seconds to import the app and open the port.
+        return $false
+    } finally {
+        $client.Close()
     }
-    Start-Sleep -Seconds 1
 }
-if ($dashboardReady) {
-    Write-Host "A dashboard elerheto." -ForegroundColor Green
-} else {
-    Write-Warning "A dashboard 45 masodperc alatt nem jelezte az egeszseges allapotot. Ellenorizd a dashboard PowerShell-ablakot es a logs\dashboard.log fajlt."
-}
-Write-Host "[5/5] A bongeszo megnyitasa..." -ForegroundColor Yellow
-Start-Process "http://localhost:8501" | Out-Null
 
-Write-Host ""
-Write-Host "A BODYLINE komponensek elinditasa megtortent. A gyartas alapbol all; az automatika gombbal indithato." -ForegroundColor Green
-Write-Host "A monitor- es dashboard-ablakot hagyd nyitva. Leallitas es naploexport a webes feluleten erheto el."
-Write-Host ""
+# Lekérem, melyik folyamat figyel az adott porton, hogy ne indítsak rá még egy dashboardot.
+function Get-ListenerOwner {
+    param([int]$Port)
+    try {
+        $connection = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $connection) { return [int]$connection.OwningProcess }
+    } catch {}
+    return $null
+}
+
+# Egy pillanatképet kérek a futó Windows-folyamatokról, és ebből szűröm ki a BODYLINE-hoz tartozókat.
+function Get-ProcessSnapshot {
+    return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+}
+
+# A Streamlit egészségvégpontján ellenőrzöm, hogy a dashboard válaszol-e.
+function Test-DashboardHealth {
+    try {
+        $response = Invoke-WebRequest -Uri $dashboardHealthUrl -UseBasicParsing -TimeoutSec 3
+        return ($response.StatusCode -eq 200 -and $response.Content.Trim() -eq "ok")
+    } catch {
+        return $false
+    }
+}
+
+# Csak az adott projekt gyökérkönyvtárához és Python-környezetéhez tartozó szolgáltatásokat azonosítom.
+function Get-BodylineServiceProcesses {
+    param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
+    $resultItems = @()
+    foreach ($process in (Get-ProcessSnapshot)) {
+        if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+        $commandLine = [string]$process.CommandLine
+        $usesProjectPython = $commandLine.IndexOf($PythonPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        $isMonitorCommand = $commandLine -match 'src\.monitor'
+        $isDashboardCommand = ($commandLine -match 'streamlit\s+run') -and ($commandLine -match 'src[/\\]dashboard\.py')
+        $isHelperCommand = ($commandLine -match 'Run-Bodyline-Service\.ps1') -and
+            ($commandLine.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        $hasMarker = $commandLine.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        if (($usesProjectPython -and ($isMonitorCommand -or $isDashboardCommand)) -or $isHelperCommand -or $hasMarker) {
+            $resultItems += $process
+        }
+    }
+    return @($resultItems)
+}
+
+# A monitorhoz tartozó segédablakokat és árva Python-folyamatokat állítom le, a dashboardot közben békén hagyom.
+function Stop-BodylineMonitorProcesses {
+    param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
+    $snapshot = Get-ProcessSnapshot
+
+    # Stop monitor helper windows first; taskkill then terminates their child Python process.
+    foreach ($process in $snapshot) {
+        if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+        $cmd = [string]$process.CommandLine
+        $isMonitorHelper = ($cmd -match 'Run-Bodyline-Service\.ps1') -and ($cmd -match 'monitor') -and
+            (($cmd.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+             ($cmd.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0))
+        if ($isMonitorHelper) {
+            & "$env:SystemRoot\System32\taskkill.exe" /PID $process.ProcessId /T /F *> $null
+        }
+    }
+
+    # Then remove orphaned monitor interpreters, without touching the healthy dashboard.
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        $remaining = @()
+        foreach ($process in (Get-ProcessSnapshot)) {
+            if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+            $cmd = [string]$process.CommandLine
+            $usesProjectPython = $cmd.IndexOf($PythonPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            if ($usesProjectPython -and ($cmd -match 'src\.monitor')) {
+                $remaining += $process
+            }
+        }
+        if ($remaining.Count -eq 0) { return }
+        foreach ($process in $remaining) {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    $remaining = @()
+    foreach ($process in (Get-ProcessSnapshot)) {
+        if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+        $cmd = [string]$process.CommandLine
+        if (($cmd.IndexOf($PythonPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and ($cmd -match 'src\.monitor')) {
+            $remaining += $process
+        }
+    }
+    foreach ($process in $remaining) {
+        Write-Warning ("A monitor process is still running (PID {0})." -f $process.ProcessId)
+    }
+}
+
+# A korábbi BODYLINE-indításból maradt segéd- és Python-folyamatokat takarítom el az új stack indítása előtt.
+# Indítás előtt az előző példány maradványait takarítom el, hogy ne ütközzön port vagy adatbázis-folyamat.
+function Stop-ExistingBodylineProcesses {
+    param([string]$RootPath, [string]$PythonPath, [string]$MarkerPrefix)
+
+    $snapshot = Get-ProcessSnapshot
+    # Kill old service wrapper trees once. Do not later taskkill the same child PIDs again.
+    foreach ($process in $snapshot) {
+        if ($process.ProcessId -eq $PID -or [string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+        $cmd = [string]$process.CommandLine
+        $isServiceHelper = ($cmd -match 'Run-Bodyline-Service\.ps1') -and
+            (($cmd.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+             ($cmd.IndexOf($MarkerPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0))
+        if ($isServiceHelper) {
+            & "$env:SystemRoot\System32\taskkill.exe" /PID $process.ProcessId /T /F *> $null
+        }
+    }
+
+    # Terminate any orphaned Python service processes and wait until they are actually gone.
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        $remaining = @(Get-BodylineServiceProcesses -RootPath $RootPath -PythonPath $PythonPath -MarkerPrefix $MarkerPrefix |
+            Where-Object {
+                $cmd = [string]$_.CommandLine
+                ($cmd.IndexOf($PythonPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and
+                (($cmd -match 'src\.monitor') -or
+                 (($cmd -match 'streamlit\s+run') -and ($cmd -match 'src[/\\]dashboard\.py')))
+            })
+
+        if ($remaining.Count -eq 0) { return }
+
+        foreach ($process in $remaining) {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    $remaining = @(Get-BodylineServiceProcesses -RootPath $RootPath -PythonPath $PythonPath -MarkerPrefix $MarkerPrefix)
+    if ($remaining.Count -gt 0) {
+        $pids = ($remaining | ForEach-Object { [string]$_.ProcessId }) -join ", "
+        throw "Could not stop old BODYLINE service processes. Remaining PID(s): $pids"
+    }
+}
+
+# Külön PowerShell-ablakban indítom a monitort vagy a dashboardot, hogy a naplójuk és állapotuk követhető legyen.
+function Start-BodylineServiceWindow {
+    param([ValidateSet("monitor", "dashboard")][string]$Service, [string]$ProjectRoot, [string]$Marker, [string]$Helper)
+    $arguments = '-NoProfile -NoExit -ExecutionPolicy Bypass -File "{0}" -ProjectRoot "{1}" -Service "{2}" -Marker "{3}"' -f $Helper, $ProjectRoot, $Service, $Marker
+    return Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
+}
+
+# A napló aktuális hosszát mérem, hogy az indítás alatt érkező új sorokat is meg tudjam különböztetni.
+function Get-TextFileLength {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    try { return [System.IO.File]::ReadAllText($Path).Length } catch { return 0 }
+}
+
+# A monitor csak akkor számít késznek, ha létrehozta a kapcsolódott állapotot jelző fájlt.
+function Test-MonitorReadySignal {
+    param([string]$ReadyPath)
+    if (-not (Test-Path -LiteralPath $ReadyPath)) { return $false }
+    try {
+        $content = [System.IO.File]::ReadAllText($ReadyPath)
+        return $content.Contains("status=connected")
+    } catch {
+        return $false
+    }
+}
+
+# A dashboard kész állapotát a forrás SHA-256 lenyomatához is kötöm.
+function Test-DashboardReadySignal {
+    param([string]$ReadyPath, [string]$ExpectedHash)
+    if (-not (Test-Path -LiteralPath $ReadyPath)) { return $false }
+    try {
+        $content = [System.IO.File]::ReadAllText($ReadyPath)
+        return $content.Contains("source_sha=$ExpectedHash")
+    } catch {
+        return $false
+    }
+}
+
+# A dashboard egészségét és a forráslenyomatot ismételt ellenőrzéssel várom meg, nem egyetlen pillanatnyi válasz alapján.
+# A dashboard csak akkor tekinthető elindultnak, ha a health végpont és a saját ready fájl is rendben van.
+function Wait-ForDashboardReady {
+    param([string]$ReadyPath, [string]$ExpectedHash, [int]$TimeoutSeconds)
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $healthyChecks = 0
+    while ($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        if ((Test-DashboardHealth) -and (Test-DashboardReadySignal -ReadyPath $ReadyPath -ExpectedHash $ExpectedHash)) {
+            $healthyChecks++
+            if ($healthyChecks -ge 2) { return $true }
+        } else {
+            $healthyChecks = 0
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
+
+# Addig várok, amíg a monitor tényleges MQTT-kapcsolatot nem jelez.
+function Wait-ForMonitorReady {
+    param([string]$ReadyPath, [int]$TimeoutSeconds)
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        if (Test-MonitorReadySignal -ReadyPath $ReadyPath) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
+# Indítási hiba esetén a napló utolsó sorait írom ki, hogy a probléma helyben diagnosztizálható legyen.
+function Show-LogTail {
+    param([string]$Path, [string]$Title)
+    Write-Host ""
+    Write-Host $Title -ForegroundColor Yellow
+    if (Test-Path -LiteralPath $Path) {
+        Get-Content -LiteralPath $Path -Tail 35 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+    } else {
+        Write-Host "A naplofajl meg nem jott letre: $Path" -ForegroundColor DarkGray
+    }
+}
+
+try {
+    try {
+        $mutexAcquired = $mutex.WaitOne(0)
+    } catch [System.Threading.AbandonedMutexException] {
+        $mutexAcquired = $true
+    }
+
+    if (-not $mutexAcquired) {
+        Write-Host "A BODYLINE inditasa mar folyamatban van. Nem inditok masodik peldanyt." -ForegroundColor Yellow
+        return
+    }
+
+    Set-Location -LiteralPath $root
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    Write-Host ""
+    Write-Host "  BODYLINE | Ipar 4.0 - oldalfal-hegesztes" -ForegroundColor Cyan
+    Write-Host "  Projekt: $root" -ForegroundColor DarkGray
+    Write-Host ""
+
+    if (-not (Test-Path -LiteralPath $venvPython)) {
+        Write-Host "[1/5] Python virtualis kornyezet letrehozasa..." -ForegroundColor Yellow
+        $py = Get-Command py -ErrorAction SilentlyContinue
+        if ($null -eq $py) { throw "Nem talalhato a Python Launcher (py). Telepits Python 3.11+ verziot." }
+        & py -3 -m venv .venv
+        if ($LASTEXITCODE -ne 0) { throw "A virtualis kornyezet letrehozasa nem sikerult." }
+    }
+    if (-not (Test-Path -LiteralPath $venvPython)) { throw "A virtualis kornyezet Pythonja nem jott letre: $venvPython" }
+
+    Write-Host "[2/5] Python-csomagok ellenorzese..." -ForegroundColor Yellow
+    & $venvPython -c "import streamlit, pandas, openpyxl, paho.mqtt.client"
+    if ($LASTEXITCODE -ne 0) {
+        & $venvPython -m pip install --upgrade pip
+        if ($LASTEXITCODE -ne 0) { throw "A pip frissitese nem sikerult." }
+        & $venvPython -m pip install -r (Join-Path $root "requirements.txt")
+        if ($LASTEXITCODE -ne 0) { throw "A fuggosegek telepitese nem sikerult." }
+        & $venvPython -c "import streamlit, pandas, openpyxl, paho.mqtt.client"
+        if ($LASTEXITCODE -ne 0) { throw "A Python-fuggosegek ellenorzese a telepites utan sem sikerult." }
+    }
+    if (-not (Test-Path -LiteralPath $helperPath)) { throw "Hianyzik az inditoszkript segedfajlja: $helperPath. Frissitsd a GitHub-repozitoriumot." }
+
+    Write-Host "[3/5] MQTT-halozati vegpont ellenorzese..." -ForegroundColor Yellow
+    $brokerHost = if ([string]::IsNullOrWhiteSpace($env:BODYLINE_MQTT_HOST)) { "127.0.0.1" } else { $env:BODYLINE_MQTT_HOST.Trim() }
+    $brokerPort = 1883
+    if (-not [string]::IsNullOrWhiteSpace($env:BODYLINE_MQTT_PORT)) {
+        if (-not [int]::TryParse($env:BODYLINE_MQTT_PORT, [ref]$brokerPort) -or $brokerPort -lt 1 -or $brokerPort -gt 65535) {
+            throw "A BODYLINE_MQTT_PORT erteke 1 es 65535 kozotti egesz szam legyen."
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($brokerHost)) { throw "A BODYLINE_MQTT_HOST nem lehet ures." }
+
+    $usesLocalBroker = $brokerHost -in @("127.0.0.1", "localhost", "::1")
+    if ($usesLocalBroker) {
+        $docker = Get-Command docker -ErrorAction SilentlyContinue
+        if ($null -eq $docker) { throw "A helyi MQTT-broker inditasahoz a docker parancs szukseges." }
+        & docker info *> $null
+        if ($LASTEXITCODE -ne 0) {
+            $dockerDesktopPaths = @((Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"), (Join-Path $env:LOCALAPPDATA "Programs\Docker\Docker\Docker Desktop.exe"))
+            $dockerDesktopExe = $dockerDesktopPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if ($dockerDesktopExe) { Start-Process -FilePath $dockerDesktopExe | Out-Null }
+            else { throw "A Docker Desktop alkalmazas nem talalhato. Inditsd el kezzel." }
+            $dockerReady = $false
+            for ($i = 0; $i -lt 90; $i++) {
+                Start-Sleep -Seconds 2
+                & docker info *> $null
+                if ($LASTEXITCODE -eq 0) { $dockerReady = $true; break }
+            }
+            if (-not $dockerReady) { throw "A Docker Engine 180 masodperc alatt sem indult el. Ellenorizd a Docker Desktopot es a WSL 2-t." }
+        }
+        & docker compose up -d mqtt
+        if ($LASTEXITCODE -ne 0) { throw "A helyi MQTT-broker inditasa nem sikerult." }
+    } else {
+        Write-Host ("Kulso LAN MQTT-broker: {0}:{1} (helyi Docker-broker inditasa kihagyva)." -f $brokerHost, $brokerPort) -ForegroundColor Cyan
+    }
+
+    $brokerReady = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        if (Test-TcpPort -HostName $brokerHost -Port $brokerPort) { $brokerReady = $true; break }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $brokerReady) { throw ("Az MQTT-broker {0}:{1} vegpontja 30 masodperc alatt nem valt elerhetove." -f $brokerHost, $brokerPort) }
+
+    $dashboardSourceHash = (Get-FileHash -LiteralPath $dashboardScript -Algorithm SHA256).Hash.ToLowerInvariant()
+    $existingDashboardFound = $false
+
+    # Reuse only a dashboard that confirms it rendered the exact source currently on disk.
+    $listenerPid = Get-ListenerOwner -Port $dashboardPort
+    if ($null -ne $listenerPid) {
+        $owner = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $listenerPid" -ErrorAction SilentlyContinue
+        $ownerCommand = if ($null -ne $owner) { [string]$owner.CommandLine } else { "" }
+        $sameProjectDashboard = ($ownerCommand.IndexOf($venvPython, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and ($ownerCommand -match 'streamlit\s+run') -and ($ownerCommand -match 'src[/\\]dashboard\.py')
+        if (-not $sameProjectDashboard) { throw "A localhost:$dashboardPort portot masik folyamat hasznalja (PID: $listenerPid). Allitsd le azt az alkalmazast." }
+        $existingDashboardFound = $true
+
+        if ((Test-DashboardHealth) -and (Test-DashboardReadySignal -ReadyPath $dashboardReadyFile -ExpectedHash $dashboardSourceHash)) {
+            $snapshot = Get-ProcessSnapshot
+            $monitorExists = $false
+            foreach ($process in $snapshot) {
+                if ([string]::IsNullOrWhiteSpace($process.CommandLine)) { continue }
+                $cmd = [string]$process.CommandLine
+                if (($cmd.IndexOf($venvPython, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and ($cmd -match 'src\.monitor')) { $monitorExists = $true; break }
+            }
+            if (-not $monitorExists -or -not (Test-MonitorReadySignal -ReadyPath $monitorReadyFile)) {
+                Write-Host "The dashboard is healthy; restarting the monitor so its MQTT readiness can be verified..." -ForegroundColor Yellow
+                Stop-BodylineMonitorProcesses -RootPath $root -PythonPath $venvPython -MarkerPrefix $serviceMarkerPrefix
+                Remove-Item -LiteralPath $monitorReadyFile -Force -ErrorAction SilentlyContinue
+                $monitorWindow = Start-BodylineServiceWindow -Service "monitor" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":monitor") -Helper $helperPath
+                if (-not (Wait-ForMonitorReady -ReadyPath $monitorReadyFile -TimeoutSeconds 30)) {
+                    Show-LogTail -Path $monitorLog -Title "Monitor log"
+                    throw "The monitor did not connect to the MQTT broker. Do not start production yet."
+                }
+            }
+            Write-Host "The current BODYLINE dashboard and monitor are healthy. No duplicate service or browser tab was started." -ForegroundColor Green
+            Write-Host "Dashboard: $dashboardUrl"
+            return
+        }
+
+        if (Test-DashboardHealth) {
+            Write-Host "The dashboard server responds, but it has not confirmed rendering the current source. Restarting the old UI..." -ForegroundColor Yellow
+        } else {
+            Write-Host "The previous BODYLINE dashboard is not responding; restarting it..." -ForegroundColor Yellow
+        }
+    }
+
+    Write-Host "Korabbi, ehhez a projekthez tartozo folyamatok ellenorzese..." -ForegroundColor Yellow
+    Stop-ExistingBodylineProcesses -RootPath $root -PythonPath $venvPython -MarkerPrefix $serviceMarkerPrefix
+    $portReleased = $false
+    for ($i = 0; $i -lt 20; $i++) {
+        if ($null -eq (Get-ListenerOwner -Port $dashboardPort)) { $portReleased = $true; break }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $portReleased) {
+        $busyPid = Get-ListenerOwner -Port $dashboardPort
+        throw "A localhost:$dashboardPort port tovabbra is foglalt (PID: $busyPid). Nem inditok masodik dashboardot."
+    }
+
+    Write-Host "[4/5] Starting MQTT monitor and dashboard..." -ForegroundColor Yellow
+    Remove-Item -LiteralPath $monitorReadyFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $dashboardReadyFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $logDir "shutdown.request") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $logDir "production_idle.ready") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $logDir "monitor.stopped") -Force -ErrorAction SilentlyContinue
+    $monitorWindow = Start-BodylineServiceWindow -Service "monitor" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":monitor") -Helper $helperPath
+    if (-not (Wait-ForMonitorReady -ReadyPath $monitorReadyFile -TimeoutSeconds 30)) {
+        Show-LogTail -Path $monitorLog -Title "Monitor log"
+        throw "The monitor did not signal a successful MQTT connection within 30 seconds. Dashboard startup was cancelled."
+    }
+    Write-Host "Az MQTT-monitor csatlakozott." -ForegroundColor Green
+
+    $dashboardWindow = Start-BodylineServiceWindow -Service "dashboard" -ProjectRoot $root -Marker ($serviceMarkerPrefix + ":dashboard") -Helper $helperPath
+    Write-Host "[5/5] Waiting for the current dashboard source to render..." -ForegroundColor Yellow
+    $dashboardReady = Wait-ForDashboardReady -ReadyPath $dashboardReadyFile -ExpectedHash $dashboardSourceHash -TimeoutSeconds 60
+    if (-not $dashboardReady) {
+        Show-LogTail -Path $dashboardLog -Title "Dashboard log"
+        throw "The dashboard did not render the current source and become healthy within 60 seconds. The browser was not opened."
+    }
+
+    Write-Host "The dashboard rendered successfully and is healthy: $dashboardUrl" -ForegroundColor Green
+    if (-not $existingDashboardFound) {
+        Write-Host "Opening the browser once..." -ForegroundColor Yellow
+        Start-Process -FilePath $dashboardUrl | Out-Null
+    } else {
+        Write-Host "The existing browser tab should reconnect to the restarted dashboard. Refresh it if it remains disconnected." -ForegroundColor Yellow
+    }
+    Write-Host ""
+    Write-Host "A BODYLINE elindult. A gyartas alapbol leallitott allapotban van; az automatikat az Elo gyartas fulon indithatod." -ForegroundColor Green
+    Write-Host "A monitor es a dashboard ablakat hagyd nyitva. Naplok: $logDir"
+    Write-Host ""
+} catch {
+    Write-Host ""
+    Write-Host ("INDITASI HIBA: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    Write-Host "A bongeszot nem nyitottam meg, mert a dashboard ellenorzese nem volt sikeres." -ForegroundColor Yellow
+    Read-Host "Nyomj Entert az ablak bezarasahoz"
+    exit 1
+} finally {
+    if ($mutexAcquired) { try { $mutex.ReleaseMutex() } catch {} }
+    $mutex.Dispose()
+}

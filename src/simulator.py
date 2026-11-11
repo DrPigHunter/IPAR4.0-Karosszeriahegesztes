@@ -12,19 +12,35 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from src.catalog import get_configuration, list_configurations
+from src.factory_settings import DEFAULT_NON_WEAR_DEFECT_PROBABILITY
+from src.network_config import BROKER_HOST, BROKER_PORT, MQTT_TOPIC
+from src.virtual_sensors import attach_virtual_sensor_metadata
+from src.wear_control import (
+    COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    COOLANT_INLET_TARGET_MAX_C,
+    COOLANT_OUTLET_TARGET_MAX_C,
+    DEFAULT_WEAR_PER_POINT_PERCENT,
+    apply_electrode_wear,
+)
 
-BROKER_HOST = "127.0.0.1"
-BROKER_PORT = 1883
-EVENT_TOPIC = "welding/events"
+EVENT_TOPIC = MQTT_TOPIC
 
 FAULT_MODES = ("within_limits", "outside_limits")
 MAX_FAULT_PROBABILITY = 0.001  # 0.1% per welding point
+MAX_NON_WEAR_DEFECT_PROBABILITY = 0.001  # 0.1% per welding point
+NON_WEAR_FAULT_CAUSE_HYPOTHESES = (
+    "SURFACE_CONTAMINATION_OR_COATING_VARIATION",
+    "PART_FIT_UP_OR_ELECTRODE_ALIGNMENT",
+    "PROCESS_PARAMETER_VARIATION",
+)
 
 
+# UTC időbélyeget adok az eseményekhez, hogy a generálási és fogadási idő később összehasonlítható legyen.
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# A szándékos teszthibát a kiválasztott paraméter határán belülre vagy egy felbontási lépéssel kívülre állítom.
 def _apply_point_variation(
     event: dict[str, Any],
     limits: Any,
@@ -59,21 +75,51 @@ def _apply_point_variation(
         )
 
 
+# A kopástól független, ritka háttérhibát külön jelöléssel injektálom; az okcímke szimulált hipotézis, nem valós gyökérok-diagnózis.
+def _apply_non_wear_process_defect(
+    event: dict[str, Any], limits: Any, rng: random.Random
+) -> None:
+    """Inject a rare, wear-independent process defect for simulation/testing.
+
+    A single process measurement is moved just outside the catalog limit so the
+    existing monitor can detect it. The cause is only a synthetic hypothesis label;
+    the simulator does not physically model contamination or part fit-up.
+    """
+    _apply_point_variation(event, limits, rng, "outside_limits")
+    event["simulated_variation"] = "BACKGROUND_PROCESS_DEFECT"
+    event["non_wear_process_defect"] = True
+    event["simulated_failure_source"] = "NON_WEAR_PROCESS_VARIATION"
+    event["simulated_failure_cause_hypothesis"] = rng.choice(NON_WEAR_FAULT_CAUSE_HYPOTHESES)
+
+
+# Egy kiválasztott modell teljes oldalfal-eseménysorát állítom elő a katalógus pontlistája, paraméterei és a kopásmodell alapján.
 def generate_body_events(
     config_id: str,
     fault_rate: float = 0.0,
     seed: int | None = None,
     fault_mode: str = "within_limits",
+    wear_state: dict[str, Any] | None = None,
+    wear_per_point_percent: float = DEFAULT_WEAR_PER_POINT_PERCENT,
+    wear_enabled: bool = False,
+    auto_correct_wear: bool = True,
+    coolant_flow_l_min: float = COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    coolant_inlet_temp_c: float = COOLANT_INLET_TARGET_MAX_C,
+    coolant_outlet_temp_c: float = COOLANT_OUTLET_TARGET_MAX_C,
+    non_wear_defect_probability: float = DEFAULT_NON_WEAR_DEFECT_PROBABILITY,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Generate a complete cycle; fault_rate is a probability per individual weld point.
+    """Generate a simulated sidewall.
 
-    A value of 0.001 means 0.1% per point. In within_limits mode, selected
-    measurements move close to an accepted limit, so the body stays compliant.
-    In outside_limits mode, selected measurements exceed one limit by one
-    measurement-resolution step and should be sent to rework.
+    ``fault_rate`` is deliberate test injection (0.001 = 0.1% per point).
+    ``non_wear_defect_probability`` is a separate, rare background process-defect
+    probability independent of the electrode-wear state. The default 0.01% per
+    point is a documented demo assumption, not an industry-wide measured rate.
+    Background defects are represented by one monitored parameter-limit breach so
+    the existing quality monitor can send the sidewall to rework.
     """
     if not 0 <= fault_rate <= MAX_FAULT_PROBABILITY:
         raise ValueError("A pontonkénti hibavalószínűség 0 és 0.001 között lehet (0–0,1%).")
+    if not 0.0 <= non_wear_defect_probability <= MAX_NON_WEAR_DEFECT_PROBABILITY:
+        raise ValueError("A kopástól független hibavalószínűség 0 és 0.001 közé essen (0–0,1%).")
     if fault_mode not in FAULT_MODES:
         raise ValueError(f"Ismeretlen hibamód: {fault_mode!r}")
 
@@ -91,6 +137,7 @@ def generate_body_events(
         "expected_count": len(expected_ids), "timestamp": utc_now(),
     }]
 
+    # Minden katalógus szerinti ponthoz külön, azonosítható eseményt készítek.
     for point in config["points"]:
         # Regular measurements have small natural-looking noise and are clamped inside
         # the model-specific acceptable range. No drop/duplicate/unexpected events are
@@ -105,26 +152,49 @@ def generate_body_events(
                 point["nominal_electrode_force_kn"] + rng.uniform(-0.04, 0.04))), 2),
             "timestamp": utc_now(),
         }
+        # A mérési értékek szimuláltak; a metaadat megnevezi a hozzájuk rendelt virtuális csatornákat.
+        attach_virtual_sensor_metadata(event)
         if fault_rate > 0 and rng.random() < fault_rate:
             _apply_point_variation(event, limits, rng, fault_mode)
+        # A second probability is separate from the wear model: even a fresh
+        # electrode can occasionally produce an unacceptable simulated weld.
+        if non_wear_defect_probability > 0 and rng.random() < non_wear_defect_probability:
+            _apply_non_wear_process_defect(event, limits, rng)
         events.append(event)
 
     events.append({
         **common, "event_type": "body_complete", "expected_weld_ids": expected_ids,
         "expected_count": len(expected_ids), "timestamp": utc_now(),
     })
+    # Keep the wear subsystem optional for callers that use the original simulator
+    # API. The dashboard passes a shared state dictionary to accumulate wear per run.
+    if wear_enabled or wear_state is not None:
+        events[-1]["electrode_wear_summary"] = apply_electrode_wear(
+            events,
+            config,
+            wear_state,
+            wear_per_point_percent=wear_per_point_percent,
+            wear_enabled=wear_enabled,
+            auto_correct=auto_correct_wear,
+            coolant_flow_l_min=coolant_flow_l_min,
+            coolant_inlet_temp_c=coolant_inlet_temp_c,
+            coolant_outlet_temp_c=coolant_outlet_temp_c,
+        )
     return body_id, events
 
 
+# Az eseményeket sorrendben publikálom MQTT-n, és megvárom a QoS 1 üzenetküldés lezárását.
 def publish_events(
     events: list[dict[str, Any]], host: str = BROKER_HOST, port: int = BROKER_PORT, delay_ms: float = 90.0
 ) -> None:
     """Publish ordered events with QoS 1 acknowledgements checked after enqueueing.
 
-    At 100%, the inter-message pause is the original 90 ms. At higher speeds,
-    waiting for each QoS 1 acknowledgement before publishing the next message
-    would serialize network round trips and defeat speed scaling. Paho keeps
-    its network loop active while messages are queued and acknowledged.
+    The caller controls the inter-message pause. The dashboard computes this
+    from the selected model's event count to target a nominal 95-second cycle;
+    direct calls that omit delay_ms retain the 90 ms API default. At higher
+    speeds, waiting for each QoS 1 acknowledgement before publishing the next
+    message would serialize network round trips and defeat speed scaling. Paho
+    keeps its network loop active while messages are queued and acknowledged.
     """
     if delay_ms < 0:
         raise ValueError("A delay_ms nem lehet negatív.")
@@ -163,6 +233,7 @@ def publish_events(
         client.disconnect()
 
 
+# A parancssori indításkor kiválasztom a konfigurációt és elindítom az automatizált eseménygenerálást.
 def main() -> None:
     configs = list_configurations()
     labels = {cfg["config_id"]: cfg["label"] for cfg in configs}

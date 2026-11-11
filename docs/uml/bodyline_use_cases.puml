@@ -1,0 +1,24 @@
+@startuml BODYLINE_UseCases
+left to right direction
+actor "Operátor" as Operator
+rectangle "BODYLINE – ponthegesztési szimuláció" {
+  usecase "Szimulált gyártás indítása" as UC1
+  usecase "Szimulációs sebesség beállítása" as UC2
+  usecase "Virtuális mérési jelek figyelése" as UC3
+  usecase "Hibás oldalfal ellenőrzése" as UC4
+  usecase "Utómunka indítása / lezárása" as UC5
+  usecase "Riport exportálása" as UC6
+  usecase "Biztonságos leállítás" as UC7
+  usecase "Pontteljesség és paraméterhatárok ellenőrzése" as UC8
+  usecase "Utómunka-sor frissítése" as UC9
+}
+Operator --> UC1
+Operator --> UC2
+Operator --> UC3
+Operator --> UC4
+Operator --> UC5
+Operator --> UC6
+Operator --> UC7
+UC4 .> UC8 : <<include>>
+UC8 .> UC9 : <<extend>>
+@enduml

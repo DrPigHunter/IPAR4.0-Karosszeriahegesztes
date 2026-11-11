@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any
 
 
+# Akkor jelzi, ha a publisher által elküldött munkadarabhoz a monitor nem készít végleges minősítést a megadott időn belül.
 class MonitorCompletionTimeout(TimeoutError):
     """Raised when a body was published but the monitor did not finalize it in time."""
 
 
+# Megvárom, amíg a monitor az adott body_id rekordját végleges állapotba írja; a PUBACK önmagában még nem minőségi eredmény.
 def wait_for_body_completion(
     body_id: str,
     db_path: str | Path,

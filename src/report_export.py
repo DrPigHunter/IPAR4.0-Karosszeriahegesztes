@@ -12,6 +12,18 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from src.catalog import list_configurations
+from src.parameter_audit import build_parameter_audit
+from src.factory_settings import DEFAULT_NON_WEAR_DEFECT_PROBABILITY
+from src.wear_control import (
+    COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    COOLANT_INLET_TARGET_MAX_C,
+    COOLANT_OUTLET_TARGET_MAX_C,
+    DEFAULT_TOOL_CHANGE_DURATION_SECONDS,
+    DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    DEFAULT_WEAR_PER_POINT_PERCENT,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT / "data" / "welding.db"
 DEFAULT_LOG_DIR = ROOT / "logs"
@@ -35,6 +47,7 @@ EMPTY_COLUMNS = {
 }
 
 
+# Kiolvasom az adatbázis összes releváns tábláját, mert a teljes riportnak nem csak a képernyőn látható legutóbbi sorokat kell tartalmaznia.
 def load_all_tables(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, pd.DataFrame]:
     """Read every available DB row without the dashboard's recent-record display limits."""
     path = Path(db_path)
@@ -52,6 +65,7 @@ def load_all_tables(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, pd.DataF
     return tables
 
 
+# Egységes rekordlistává alakítom a JSON- és JSONL-fájlokat az Excel-export számára.
 def _read_json_records(paths: list[Path], jsonl: bool = False) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in sorted(paths):
@@ -81,6 +95,7 @@ def _read_json_records(paths: list[Path], jsonl: bool = False) -> list[dict[str,
     return records
 
 
+# Összegyűjtöm a futás-, alkalmazás- és konzolnaplókat, hogy a riport a működés körülményeit is megőrizze.
 def load_file_logs(log_dir: str | Path = DEFAULT_LOG_DIR) -> dict[str, pd.DataFrame]:
     """Load per-body, daily, application, console, and aggregate JSON logs."""
     root = Path(log_dir)
@@ -116,6 +131,7 @@ def load_file_logs(log_dir: str | Path = DEFAULT_LOG_DIR) -> dict[str, pd.DataFr
     }
 
 
+# Az operátori és alkalmazási műveletet azonnal fájlba írom és lemezre ürítem, így leállítás után is visszakereshető.
 def append_application_log(
     event: str,
     details: dict[str, Any] | None = None,
@@ -135,6 +151,7 @@ def append_application_log(
     return path
 
 
+# A dashboard aktuális futásához tartozó rekordokat választom le a korábban megőrzött futásokról.
 def _session_filter(bodies: pd.DataFrame, session_started_at: float | None) -> pd.DataFrame:
     if bodies.empty or "started_at" not in bodies.columns or session_started_at is None:
         return bodies.copy()
@@ -143,10 +160,12 @@ def _session_filter(bodies: pd.DataFrame, session_started_at: float | None) -> p
     return bodies.loc[started >= cutoff - pd.Timedelta(seconds=2)].copy()
 
 
+# Százalékos arányt számítok; üres nevező esetén nullával térek vissza, hogy a riport ne hibázzon.
 def _percent(numerator: int | float, denominator: int | float) -> float:
     return round(100.0 * numerator / denominator, 2) if denominator else 0.0
 
 
+# A futás összesítő KPI-jait és a modellenkénti bontást készítem elő az Excel-jelentéshez.
 def _make_summary(
     tables: dict[str, pd.DataFrame],
     session_started_at: float | None,
@@ -236,6 +255,174 @@ def _make_summary(
     return summary, by_model, info
 
 
+# A ponteseményekből kopási és automatikus korrekciós összesítést állítok össze.
+def _make_wear_summary_frame(events: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate electrode-wear and correction details persisted in raw MQTT events."""
+    columns = [
+        "Modellazonosító", "Hegesztési pontok", "Sikeres önkorrekciók",
+        "Korrekciós lépések", "Sikertelen korrekciók",
+        "Legnagyobb kopás (%)", "Átlagos minőségi mutató (%)",
+    ]
+    if events.empty or "raw_json" not in events.columns:
+        return pd.DataFrame([{"Megjegyzés": "Még nincs rögzített elektródakopási adat."}])
+
+    grouped: dict[str, dict[str, Any]] = {}
+    all_values: list[dict[str, Any]] = []
+    for raw in events["raw_json"].tolist():
+        try:
+            payload = json.loads(str(raw))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if payload.get("event_type") != "weld_result" or payload.get("electrode_wear_enabled") is not True:
+            continue
+        model = str(payload.get("config_id") or "Ismeretlen")
+        for key in (model, "ÖSSZESEN"):
+            bucket = grouped.setdefault(key, {
+                "points": 0, "corrected": 0, "steps": 0, "failed": 0,
+                "max_wear": 0.0, "quality_sum": 0.0, "quality_count": 0,
+            })
+            bucket["points"] += 1
+            bucket["corrected"] += int(bool(payload.get("auto_correction_applied")))
+            bucket["steps"] += int(payload.get("auto_correction_steps", 0) or 0)
+            bucket["failed"] += int(payload.get("process_quality_ok") is False)
+            bucket["max_wear"] = max(bucket["max_wear"], float(payload.get("electrode_wear_percent", 0.0) or 0.0))
+            quality = payload.get("simulated_quality_index_percent")
+            if isinstance(quality, (int, float)):
+                bucket["quality_sum"] += float(quality)
+                bucket["quality_count"] += 1
+
+    rows = []
+    for model, values in grouped.items():
+        rows.append({
+            "Modellazonosító": model,
+            "Hegesztési pontok": values["points"],
+            "Sikeres önkorrekciók": values["corrected"],
+            "Korrekciós lépések": values["steps"],
+            "Sikertelen korrekciók": values["failed"],
+            "Legnagyobb kopás (%)": round(values["max_wear"], 3),
+            "Átlagos minőségi mutató (%)": (
+                round(values["quality_sum"] / values["quality_count"], 2)
+                if values["quality_count"] else None
+            ),
+        })
+    return pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(
+        [{"Megjegyzés": "A naplózott események között nincs bekapcsolt kopásmodellből származó adat."}
+    ])
+
+
+# Az alkalmazásnaplóból külön eszközcsere-naplót készítek.
+def _make_tool_change_frame(application_log: pd.DataFrame) -> pd.DataFrame:
+    """Extract automatic and operator-triggered tool changes into a dedicated report sheet."""
+    columns = [
+        "Időpont", "Csere módja", "Előző eszköz", "Új eszköz", "Eszközcsere sorszáma",
+        "Csere előtti kopás (%)", "Teljes karosszéria azonosítója",
+        "Karosszéria-intervallum", "Karosszériák az előző csere óta",
+        "Végrehajtás időablaka", "Szimulált csereidő (mp)", "Tervezett szünet (mp)",
+        "Az előző eszköz pontjai", "Az előző eszköz sikeres korrekciói",
+        "Az előző eszköz sikertelen korrekciói",
+    ]
+    rows: list[dict[str, Any]] = []
+    if not application_log.empty:
+        for _, log_row in application_log.iterrows():
+            if str(log_row.get("event") or "") != "electrode_tool_replaced":
+                continue
+            details = log_row.get("details", {})
+            if isinstance(details, str):
+                try:
+                    details = json.loads(details)
+                except json.JSONDecodeError:
+                    details = {}
+            if not isinstance(details, dict):
+                details = {}
+            rows.append({
+                "Időpont": log_row.get("timestamp"),
+                "Csere módja": details.get("change_mode", "Ismeretlen"),
+                "Előző eszköz": details.get("previous_tool_number"),
+                "Új eszköz": details.get("new_tool_number"),
+                "Eszközcsere sorszáma": details.get("tool_change_number"),
+                "Csere előtti kopás (%)": details.get("wear_percent_before_reset"),
+                "Teljes karosszéria azonosítója": details.get("completed_body_id", ""),
+                "Karosszéria-intervallum": details.get("replacement_interval_bodies"),
+                "Karosszériák az előző csere óta": details.get("bodies_since_previous_change"),
+                "Végrehajtás időablaka": details.get("execution_window", ""),
+                "Szimulált csereidő (mp)": details.get("simulated_change_duration_seconds"),
+                "Tervezett szünet (mp)": details.get("scheduled_inter_body_pause_seconds"),
+                "Az előző eszköz pontjai": details.get("tool_weld_points_before_reset"),
+                "Az előző eszköz sikeres korrekciói": details.get("tool_corrected_points_before_reset"),
+                "Az előző eszköz sikertelen korrekciói": details.get("tool_uncorrectable_points_before_reset"),
+            })
+    if not rows:
+        return pd.DataFrame([{"Megjegyzés": "Ebben a naplóban még nincs automatikus vagy kézi eszközcsere."}])
+    return pd.DataFrame(rows, columns=columns)
+
+
+# A riportba kerülő forrásokat és értelmezési megjegyzéseket gyűjtöm össze.
+def _make_sources_frame() -> pd.DataFrame:
+    """Give the exported workbook a clear source trail for engineering assumptions."""
+    return pd.DataFrame([
+        {
+            "Forrás / kiadó": "TWI – How can I minimise electrode wear in resistance spot welding?",
+            "Felhasznált állítás": (
+                "Bevonatos/vastagabb acélhoz tipikusan legalább 6 l/perc hűtővíz; belépő max. 20 °C; "
+                "kilépő max. 30 °C. A kopást hő-/mechanikai hatások és bevonat-ötvöződés befolyásolja."
+            ),
+            "Projektbeli szerep": "Hűtési alapértékek és figyelmeztetési küszöbök.",
+            "URL": "https://www.twi-global.com/technical-knowledge/faqs/faq-how-can-i-minimise-electrode-wear-in-resistance-spot-welding",
+            "Korlát": "Referencia-feltétel; a tényleges hűtést a hegesztőpisztoly/elektróda és berendezés kézikönyve határozza meg.",
+        },
+        {
+            "Forrás / kiadó": "European Aluminium Association – Aluminium Automotive Manual, Resistance Welding (2015)",
+            "Felhasznált állítás": "Joule-hőbevitel Q ~ I²·R·t; acélnál tipikusan 15 kA alatti áram és 0,2–4 kN elektródaerő elegendő.",
+            "Projektbeli szerep": "Szintetikus hőbeviteli proxy és széles paraméter-plauzibilitási audit.",
+            "URL": "https://european-aluminium.eu/wp-content/uploads/2022/11/5-resistance-welding_2015.pdf",
+            "Korlát": "Általános berendezési referencia, nem konkrét járműmodell vagy hegesztési pont receptje.",
+        },
+        {
+            "Forrás / kiadó": "Wohner et al. – Welding in the World (2021), 22MnB5+AS150 study",
+            "Felhasznált állítás": "Egy konkrét 1,5 mm-es 22MnB5+AS150 kötés 4,6–6,0 kA tartományában mutatott hegeszthetőségi ablakot; elektródaerő-profilokat is vizsgáltak.",
+            "Projektbeli szerep": "Annak alátámasztása, hogy a jó áram/erő függ az anyagtól és a kötéskialakítástól.",
+            "URL": "https://link.springer.com/article/10.1007/s40194-020-01001-2",
+            "Korlát": "Csak a tanulmány konkrét anyagára, vastagságára, illesztésére és elektródájára érvényes.",
+        },
+        {
+            "Forrás / kiadó": "European Commission CORDIS – SMARTDRESS",
+            "Felhasznált állítás": "Optikai elektródakopás-figyelés, állapotfüggő dresszelési ütemezés és automatikus elektródacsere koncepció.",
+            "Projektbeli szerep": "A kopásalapú karbantartás és eszközcsere-szabályozás architekturális indoklása.",
+            "URL": "https://cordis.europa.eu/project/id/286598/reporting",
+            "Korlát": "A projekt nem szolgáltat univerzális X-karosszéria csereintervallumot; a jelenlegi 100-as érték demó-alapérték.",
+        },
+        {
+            "Forrás / kiadó": "TWI – Ensuring quality and consistency of resistance spot welds",
+            "Felhasznált állítás": "A minőséget többek között az anyagminőség, felületi szennyeződés/bevonat, illeszkedés, elektróda-beállítás, elektródaerő és hegesztési idő befolyásolja.",
+            "Projektbeli szerep": "A kopástól független folyamat-hibamódok lehetőségének forrása.",
+            "URL": "https://www.twi-global.com/technical-knowledge/faqs/faq-what-must-be-done-to-ensure-the-quality-and-consistency-of-resistance-spot-welds",
+            "Korlát": "A forrás nem ad minden gyártósorra érvényes, univerzális százalékos hibaarányt.",
+        },
+        {
+            "Forrás / kiadó": "Liu et al. – Welding Defects Occurrence and Their Effects on Weld Quality in Resistance Spot Welding of AHSS Steel (ISIJ International, 2014)",
+            "Felhasznált állítás": "A DP600 vizsgálat az elektródaerő, hegesztőáram és hegesztési idő kapcsolatát vizsgálja a hibákkal metallográfiai és szakító-nyíró tesztekkel.",
+            "Projektbeli szerep": "Alátámasztja, hogy a hegesztési hibák nem csak elektródakopásból származhatnak.",
+            "URL": "https://www.jstage.jst.go.jp/article/isijinternational/54/8/54_1883/_html/-char/en",
+            "Korlát": "Konkrét anyag és vizsgálati beállítás; nem univerzális sorozatgyártási hibaszázalék.",
+        },
+        {
+            "Forrás / kiadó": "Projektmérnöki megjegyzés – szimulációs hibakockázat",
+            "Felhasznált állítás": "0,01% kopástól független hiba/hegesztési pont (1:10 000); kb. 1,17–1,41% esély legalább egy eseményre egy 118–142 pontos oldalfalon.",
+            "Projektbeli szerep": "Ritka, a kopási állapottól független folyamat-hiba demonstrációja és elutasított darabok/utómunka útvonal tesztelése.",
+            "URL": "docs/parameter_realism_audit.md",
+            "Korlát": "Kifejezett oktatási célú feltételezés, nem a szakirodalomból átvett ipari hibaarány; valós üzemi adatok nélkül nem tekinthető mért értéknek.",
+        },
+        {
+            "Forrás / kiadó": "Projektmérnöki megjegyzés – kopás és önkorrekció",
+            "Felhasznált állítás": "0,005% / pont kopási ütem, 100 baloldalfal-ciklusos csere, 5 s szimulált csereidő, 0,1 kA és 5 ms korrekciós lépés, 95%-os minőségi cél.",
+            "Projektbeli szerep": "A demonstrációban használt beállítások.",
+            "URL": "docs/parameter_realism_audit.md",
+            "Korlát": "Ezek nem forrásból vett gyári paraméterek; helyi mérési adatok nélkül csak szemléltető kezdőértékek.",
+        },
+    ])
+
+
+# Az Excel számára problémás értékeket és adattípusokat teszem biztonságossá.
 def _excel_safe(frame: pd.DataFrame) -> pd.DataFrame:
     """Convert structured Python values to text before passing them to openpyxl."""
     result = frame.copy()
@@ -252,6 +439,7 @@ EXCEL_MAX_ROWS = 1_048_576
 EXCEL_MAX_DATA_ROWS = EXCEL_MAX_ROWS - 1  # reserve row 1 for column headings
 
 
+# A nagy adathalmazokat Excel-munkalapokra bontom úgy, hogy egyetlen rekord se vesszen el.
 def split_long_sheets(
     sheets: dict[str, pd.DataFrame],
     max_data_rows: int = EXCEL_MAX_DATA_ROWS,
@@ -271,6 +459,7 @@ def split_long_sheets(
     return expanded
 
 
+# Az adatbázisból, naplókból és beállításokból dátumozott, több munkalapos Excel-riportot állítok elő.
 def export_production_report(
     session_started_at: float | None,
     fault_rate_percent: float,
@@ -280,6 +469,16 @@ def export_production_report(
     log_dir: str | Path = DEFAULT_LOG_DIR,
     export_timestamp: datetime | None = None,
     speed_percent: float = 100.0,
+    wear_enabled: bool = True,
+    wear_per_point_percent: float = DEFAULT_WEAR_PER_POINT_PERCENT,
+    auto_correct_wear: bool = True,
+    auto_tool_change_enabled: bool = True,
+    tool_change_interval_bodies: int = DEFAULT_TOOL_CHANGE_INTERVAL_BODIES,
+    tool_change_duration_seconds: float = DEFAULT_TOOL_CHANGE_DURATION_SECONDS,
+    coolant_flow_l_min: float = COATED_STEEL_COOLANT_FLOW_TARGET_L_MIN,
+    coolant_inlet_temp_c: float = COOLANT_INLET_TARGET_MAX_C,
+    coolant_outlet_temp_c: float = COOLANT_OUTLET_TARGET_MAX_C,
+    non_wear_defect_probability_percent: float = DEFAULT_NON_WEAR_DEFECT_PROBABILITY * 100.0,
 ) -> tuple[Path, bytes, dict[str, Any]]:
     """Write a dated Excel report to disk and return its bytes for browser download."""
     now = export_timestamp or datetime.now().astimezone()
@@ -301,17 +500,33 @@ def export_production_report(
         {"Beállítás": "Jelentés fájlneve", "Érték": target.name},
         {"Beállítás": "Adatbázis elérési útja", "Érték": str(Path(db_path).resolve())},
         {"Beállítás": "Napló mappája", "Érték": str(root.resolve())},
-        {"Beállítás": "Pont-eltérés valószínűsége (%)", "Érték": float(fault_rate_percent)},
+        {"Beállítás": "Tesztcélú pont-eltérés valószínűsége (%)", "Érték": float(fault_rate_percent)},
+        {"Beállítás": "Kopástól független alapfolyamat-hiba / pont (%)", "Érték": float(non_wear_defect_probability_percent)},
         {"Beállítás": "Eltérés módja", "Érték": fault_mode},
         {"Beállítás": "Szimulációs sebesség (%)", "Érték": float(speed_percent)},
+        {"Beállítás": "Elektródakopás modellezése", "Érték": bool(wear_enabled)},
+        {"Beállítás": "Kopás hegesztési pontonként (%)", "Érték": float(wear_per_point_percent)},
+        {"Beállítás": "Automatikus önkorrekció", "Érték": bool(auto_correct_wear)},
+        {"Beállítás": "Automatikus eszközcsere", "Érték": bool(auto_tool_change_enabled)},
+        {"Beállítás": "Eszközcsere minden X oldalfalciklus után", "Érték": int(tool_change_interval_bodies)},
+        {"Beállítás": "Szimulált eszközcsere-idő (mp)", "Érték": float(tool_change_duration_seconds)},
+        {"Beállítás": "Hűtővíz-áramlás (l/perc)", "Érték": float(coolant_flow_l_min)},
+        {"Beállítás": "Hűtővíz belépő hőmérséklet (°C)", "Érték": float(coolant_inlet_temp_c)},
+        {"Beállítás": "Hűtővíz kilépő hőmérséklet (°C)", "Érték": float(coolant_outlet_temp_c)},
+        {"Beállítás": "Minőségi célérték (%)", "Érték": 95.0},
         {"Beállítás": "Automatika leállt az exportig", "Érték": bool(automatic_worker_stopped)},
         {"Beállítás": "Megjegyzés", "Érték": "A részletes lapok minden elérhető adatbázisrekordot tartalmaznak, nem csak a képernyőn látható legutóbbi sorokat."},
     ])
+    # Minden adattípust külön munkalapra teszek, hogy az összesítő mellett a részletes adatok is visszakereshetők legyenek.
     sheets = {
         "Összesítő": summary,
         "Modellenként": by_model,
         "Karosszériák": tables["bodies"],
         "Hegesztési adatok": tables["weld_events"],
+        "Kopás és önkorrekció": _make_wear_summary_frame(tables["weld_events"]),
+        "Eszközcsere-napló": _make_tool_change_frame(file_logs["application_log"]),
+        "Paraméter-audit": pd.DataFrame(build_parameter_audit(list_configurations())),
+        "Források": _make_sources_frame(),
         "Utómunka sor": tables["rework_queue"],
         "Utómunka műveletek": tables["rework_actions"],
         "Rendszerhibák": tables["system_errors"],

@@ -94,3 +94,69 @@ python -m unittest discover -s tests -v
 ## Korlátok és feltevések
 
 A jármű- és paraméteradatokat oktatási céllal szintetikusan állítottuk elő. Nem szabad tényleges Audi, CUPRA, Volkswagen vagy Škoda gyártási előírásként kezelni őket. A folyamatparaméterek ellenőrzése nem igazolja a fizikai hegesztési kötés minőségét vagy mechanikai szilárdságát. A referencia-konfigurációk forrása az Excel, a DB csak a futás eredményeit és eseményeit rögzíti.
+
+## Virtuális érzékelők és adatforrások
+
+A rendszerben nincs fizikai szenzor. A mérési értékeket a `src/simulator.py` állítja elő a kiválasztott Excel-konfiguráció névleges értékei körüli szimulált variációval. A `src/virtual_sensors.py` minden hegesztési eredményhez csatolja a virtuális csatorna azonosítóját és az adat eredetét. Egy `weld_result` esemény egy mintát jelent egy hegesztési pontnál; a mintavételezés tehát eseményvezérelt, nem állandó Hz-frekvenciájú.
+
+| Virtuális csatorna | Azonosító | Adatmező | Mértékegység | Mintavétel |
+|---|---|---|---|---|
+| Hegesztőáram mérőmodell | `VS-CURRENT-01` | `current_ka` | kA | 1 eseményminta/hegesztési pont |
+| Hegesztési idő időmérőmodell | `VS-TIMER-01` | `weld_time_ms` | ms | 1 eseményminta/hegesztési pont |
+| Elektródaerő mérőmodell | `VS-FORCE-01` | `electrode_force_kn` | kN | 1 eseményminta/hegesztési pont |
+
+Az esemény a `signal_origin=SIMULATED_VIRTUAL_SENSOR` mezővel jelzi az eredetet, és a `sensor_sources` mezőben a virtuális csatornaazonosítókat adja meg. A kódban a természetesnek szánt alapvariáció az áramnál ±0,12 kA, a hegesztési időnél ±4 ms, az elektródaerőnél ±0,04 kN; az értékek a katalógus határain belül maradnak, kivéve a külön hibainjektálást vagy a kopásmodell által jelzett esetet. Ezek programozott modellértékek, nem fizikai mérőeszköz pontossági adatai és nem kalibrációs bizonytalanságok.
+
+## Logikai beavatkozási és ember–gép interakciós pontok
+
+| Azonosító | Beavatkozási pont | Kimenet | Fizikai hatás |
+|---|---|---|---|
+| `LA-PARAM-COMP-01` | Korlátozott paraméterkorrekció | Áram-/hegesztésiidő-érték módosítása a katalógushatárokon belül | Nincs; a következő szimulált jelre hat |
+| `LA-REWORK-ROUTE-01` | Utómunka-útvonal logikai kapcsolója | Hibás oldalfal felvétele az SQLite utómunka-sorába | Nincs; adatbázis-állapotváltozás |
+| `LA-TOOL-CHANGE-01` | Elektródaegység-csere szimulációja | Kopási állapot nullázása, csereesemény naplózása | Nincs; szimulált karbantartási esemény |
+
+Az operátor a dashboardon indítja és állítja le a gyártást, módosíthatja a sebességet, START/COMPLETE műveletekkel kezeli az utómunkát, illetve riportot exportálhat. A beavatkozási pontok szoftveres/logikai aktuátorok, nem robot-, PLC- vagy hegesztőpisztoly-kimenetek.
+
+## 0. rendű adatfolyamdiagram (DFD Level 0)
+
+Az ábra a rendszer külső szereplőit, fő folyamatait, adattárait és a hálózati szolgáltatást mutatja. A három virtuális érzékelő egyetlen „P1 – mérési adatok előállítása” folyamat részeként jelenik meg; a fizikai folyamaton nincs tényleges mérőmodul.
+
+```mermaid
+flowchart LR
+  OP[Operátor] -->|indítás, sebesség, utómunka| P4((P4 Kezelőfelület és export))
+  D1[(D1 Excel referencia-katalógus)] -->|modell, pontlista, névleges értékek| P1((P1 Szimuláció és virtuális jelek))
+  P1 -->|áram kA, idő ms, erő kN| P2((P2 MQTT publish))
+  P2 -->|welding/events · QoS 1| N1{{N1 Mosquitto broker}}
+  N1 -->|JSON események| P3((P3 Monitor és minősítés))
+  D1 -->|elvárt pontok és határértékek| P3
+  P3 -->|mérések, hibák, státusz| D2[(D2 SQLite futásadatbázis)]
+  P3 -->|hibás oldalfal| P5((P5 Utómunka útvonal))
+  P5 -->|START / COMPLETE| D2
+  D2 -->|állapot és előzmények| P4
+  P4 -->|virtuális beavatkozási döntések| P1
+  P4 -->|riport és naplók| D3[(D3 XLSX / TXT export)]
+  P4 -->|kopási állapot| D4[(D4 equipment_state.json)]
+```
+
+## Helyi hálózati kapcsolat
+
+Alapértelmezésben a publisher és a monitor `127.0.0.1:1883` címen éri el a Dockerben futó Mosquitto brokert. A kliensvégpont a `src/network_config.py` modulban közös, és környezeti változókból LAN-címre állítható:
+
+```powershell
+$env:BODYLINE_MQTT_HOST = "192.168.1.50"
+$env:BODYLINE_MQTT_PORT = "1883"
+$env:BODYLINE_MQTT_TOPIC = "welding/events"
+.\Start_HegesztesSzimulacio.ps1
+```
+
+A példában a `192.168.1.50` csak helyőrző; a broker tényleges IP-címét kell megadni. A beállításnak a publisheren és a monitoron is azonosnak kell lennie. A Mosquitto konténer 1883-as portja a Docker host hálózati interfészein publikálódik, így magánhálózaton másik gépről is elérhető lehet, ha a tűzfal engedélyezi.
+
+**Biztonsági korlát:** a jelenlegi Mosquitto-konfiguráció anonim hozzáférést és titkosítatlan MQTT-t használ oktatási laborhoz. A 1883-as portot kizárólag megbízható, elkülönített magánhálózaton szabad használni; internetre továbbítani tilos. Éles környezethez felhasználónév/jelszó, ACL, TLS és hálózati szegmentálás szükséges.
+
+## UML-terv
+
+A tervezési nézeteket PlantUML-források tartalmazzák a `docs/uml/` mappában: használatieset-diagram, telepítési diagram, aktivitásdiagram és munkadarab-állapotgép. Ezek együtt mutatják be a rendszerhatárt, az operátori szerepet, az adatút fő lépéseit, a helyi hálózati szolgáltatást és az utómunka állapotátmeneteit. A UML-rajzok a jelenlegi szoftveres demonstrációt írják le; nem állítanak fizikai érzékelő- vagy aktuátor-hardvert.
+
+## Videóbemutató
+
+A kötelező rendszerbemutató videó felvételéhez a `docs/video_demo_script.md` forgatókönyvet és a `tools/Record-Bodyline-Demo.ps1` FFmpeg segédszkriptet lehet használni. A tényleges MP4-fájlt a működő rendszerről kell felvenni, majd a `docs/demo_video/BODYLINE_demo.mp4` útvonalon a repositoryba feltölteni. A felvételi segéd hozzáadása önmagában nem helyettesíti a videófájlt.

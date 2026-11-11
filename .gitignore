@@ -10,3 +10,6 @@ data/*.db-wal
 
 # Generated runtime statistics and per-cycle JSON logs
 logs/
+
+# Persistent local-only simulated equipment life/settings
+data/equipment_state.json

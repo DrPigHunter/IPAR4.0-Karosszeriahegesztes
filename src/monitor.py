@@ -12,18 +12,20 @@ import paho.mqtt.client as mqtt
 
 from src.catalog import CatalogError, get_configuration
 from src.rules import evaluate_body, validate_event
+from src.network_config import BROKER_HOST, BROKER_PORT, MQTT_TOPIC
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "welding.db"
 LOG_DIR = ROOT / "logs"
-BROKER_HOST, BROKER_PORT, TOPIC = "127.0.0.1", 1883, "welding/events"
+TOPIC = MQTT_TOPIC
 
 REWORK_WAITING = "UTÓMUNKÁRA VÁR"
 REWORK_IN_PROGRESS = "UTÓMUNKA FOLYAMATBAN"
 REWORK_DONE = "UTÓMUNKA ELVÉGEZVE – ÚJRAELLENŐRZÉS SZÜKSÉGES"
 
 
+# Létrehozom vagy megnyitom a futási SQLite-adatbázist, és előkészítem a szükséges táblákat.
 def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     """Runtime DB stores observations, run history, and rework only—not reference recipes."""
     target = Path(db_path) if db_path is not None else DB_PATH
@@ -76,6 +78,7 @@ def connect_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+# A feldolgozhatatlan üzeneteket is eltárolom, hogy az adatút hibái később visszakereshetők legyenek.
 def log_processing_error(
     conn: sqlite3.Connection, category: str, detail: str, raw_payload: str = ""
 ) -> None:
@@ -87,6 +90,7 @@ def log_processing_error(
     conn.commit()
 
 
+# Elmentem az oldalfal azonosítóját és az induláskor érvényes konfiguráció elvárt pontlistáját.
 def _ensure_body(
     conn: sqlite3.Connection, body_id: str, config_id: str,
     config: dict[str, Any], timestamp: str,
@@ -100,6 +104,7 @@ def _ensure_body(
     )
 
 
+# Az eseményben kapott konfigurációt ellenőrzöm a verziózott Excel-katalógussal, és elutasítom az eltérő vagy ismeretlen azonosítót.
 def _resolve_config(conn: sqlite3.Connection, event: dict[str, Any], body_id: str) -> tuple[str, dict[str, Any]] | None:
     """Resolve config from event, falling back to the already registered body run."""
     config_id = str(event.get("config_id") or "").strip()
@@ -125,6 +130,7 @@ def _resolve_config(conn: sqlite3.Connection, event: dict[str, Any], body_id: st
     return config_id, config
 
 
+# Itt fut össze a monitor fő logikája: az eseménytípus alapján pontot ellenőrzök, ciklust zárok, vagy utómunka-állapotot módosítok.
 def process_event(
     conn: sqlite3.Connection, event: dict[str, Any], received_at: float | None = None,
     log_dir: str | Path | None = None,
@@ -147,12 +153,22 @@ def process_event(
         if not resolved:
             return
         config_id, config = resolved
+        prior_start = conn.execute(
+            "SELECT started_received_at FROM bodies WHERE body_id=?", (body_id,)
+        ).fetchone()
+        is_first_load = prior_start is None or prior_start["started_received_at"] is None
         _ensure_body(conn, body_id, config_id, config, timestamp)
         conn.execute(
             "UPDATE bodies SET started_received_at=COALESCE(started_received_at, ?) WHERE body_id=?",
             (received_at, body_id),
         )
         conn.commit()
+        if log_dir is not None and is_first_load:
+            try:
+                from src.run_logger import write_part_loaded_log
+                write_part_loaded_log(log_dir, body_id, config, timestamp)
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"WARNING: could not write part-load TXT log: {exc}")
         return
 
     if event_type == "weld_result":
@@ -166,6 +182,11 @@ def process_event(
             return
         _ensure_body(conn, body_id, config_id, config, timestamp)
         errors = validate_event(event, limits=config["limits"])
+        if event.get("process_quality_ok") is False:
+            errors.append(
+                "Elektródakopás miatti minőségi eltérés: az automatikus korrekció nem érte el a "
+                "szimulált célértéket a megengedett határokon belül."
+            )
         if weld_id not in config["expected_weld_ids"]:
             errors.append("Váratlan hegesztési pont: nem szerepel a GitHubon verziózott Excel-katalógus pontlistájában.")
         exists = conn.execute(
@@ -190,13 +211,24 @@ def process_event(
             (param_error_count, body_id),
         )
         conn.commit()
+        if errors and log_dir is not None:
+            try:
+                from src.run_logger import write_weld_error_log
+                write_weld_error_log(log_dir, event, errors)
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"WARNING: could not write weld-fault TXT log: {exc}")
         return
 
+    # A lezáró eseménynél az elvárt és tényleges pontlistát, valamint az összes hibajelzést együtt értékelem.
     if event_type == "body_complete":
         resolved = _resolve_config(conn, event, body_id)
         if not resolved:
             return
         config_id, config = resolved
+        prior_completion = conn.execute(
+            "SELECT completed_at FROM bodies WHERE body_id=?", (body_id,)
+        ).fetchone()
+        is_first_completion = prior_completion is None or prior_completion["completed_at"] is None
         _ensure_body(conn, body_id, config_id, config, timestamp)
         expected_ids = list(config["expected_weld_ids"])
         conn.execute(
@@ -214,6 +246,14 @@ def process_event(
             )
             for row in rows
         )
+        wear_failed_ids = [
+            str(row["weld_id"])
+            for row in rows
+            if any(
+                "Elektródakopás miatti minőségi eltérés" in str(error)
+                for error in json.loads(row["errors_json"])
+            )
+        ]
         result = evaluate_body(expected_ids, received_ids, parameter_errors)
         start_row = conn.execute(
             "SELECT started_received_at FROM bodies WHERE body_id=?", (body_id,)
@@ -247,6 +287,13 @@ def process_event(
                 reason_parts.append(f"Váratlan pontok: {', '.join(result['unexpected_ids'])}")
             if result["duplicate_ids"]:
                 reason_parts.append(f"Duplikált pontok: {', '.join(result['duplicate_ids'])}")
+            if wear_failed_ids:
+                sample_ids = ", ".join(wear_failed_ids[:10])
+                suffix = " …" if len(wear_failed_ids) > 10 else ""
+                reason_parts.append(
+                    f"Elektródakopás miatti sikertelen korrekció: {len(wear_failed_ids)} pont "
+                    f"(például: {sample_ids}{suffix})"
+                )
             if parameter_errors:
                 reason_parts.append(f"Paraméterhibák: {parameter_errors}")
             reason = "; ".join(reason_parts) or "A karosszéria nem felelt meg az ellenőrzésnek."
@@ -256,18 +303,19 @@ def process_event(
                 (body_id, reason, REWORK_WAITING, timestamp, timestamp),
             )
         conn.commit()
-        if log_dir is not None:
+        if log_dir is not None and is_first_completion:
             try:
                 from src.run_logger import write_run_log
                 path = write_run_log(
                     conn, body_id, config, expected_ids, received_ids, result,
                     parameter_errors, duration_seconds, log_dir,
                 )
-                print(f"Futásstatisztika elmentve: {path}")
+                print(f"Production TXT log updated: {path}")
             except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
-                print(f"FIGYELEM: a futásnapló mentése nem sikerült: {exc}")
+                print(f"WARNING: could not write completed-part TXT log: {exc}")
         return
 
+    # Az utómunka kizárólag a megengedett WAITING → IN_PROGRESS → DONE állapotmenetben léphet tovább.
     if event_type == "rework_action":
         action, note = event.get("action"), str(event.get("note") or "")
         transitions = {"START": (REWORK_WAITING, REWORK_IN_PROGRESS),
@@ -292,49 +340,134 @@ def process_event(
             (body_id, action, note, timestamp),
         )
         conn.commit()
+        if log_dir is not None:
+            try:
+                from src.run_logger import write_rework_action_log
+                write_rework_action_log(log_dir, body_id, str(action), timestamp)
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"WARNING: could not write rework TXT log: {exc}")
         return
 
     log_processing_error(conn, "ISMERETLEN ESEMÉNYTÍPUS", f"Nem támogatott event_type: {event_type!r}", json.dumps(event, ensure_ascii=False))
 
 
+# Csak sikeres MQTT-kapcsolat után jelzem az indítónak, hogy a monitor fogadásra kész.
+def signal_monitor_ready() -> None:
+    """Atomically signal successful MQTT connection to the PowerShell launcher."""
+    import os
+
+    ready_file = os.environ.get("BODYLINE_READY_FILE")
+    if not ready_file:
+        return
+    target = Path(ready_file)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(
+        "status=connected\n"
+        + f"timestamp={datetime.now().astimezone().isoformat()}\n",
+        encoding="utf-8",
+    )
+    temporary.replace(target)
+
+
+# Kapcsolatvesztéskor eltávolítom a kész állapot jelzését, hogy az indító ne tekintse aktívnak a monitort.
+def clear_monitor_ready() -> None:
+    """Remove the ready signal after an MQTT disconnect."""
+    import os
+
+    ready_file = os.environ.get("BODYLINE_READY_FILE")
+    if ready_file:
+        try:
+            Path(ready_file).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+# Elindítom a feliratkozó folyamatot, felépítem a broker-kapcsolatot, majd biztonságos leállításig figyelem az üzeneteket.
 def main() -> None:
     conn = connect_db()
     try:
         from src.catalog import list_configurations
         all_configs = list_configurations()
-        print(f"Excel katalógus betöltve: {len(all_configs)} modell–alkatrész konfiguráció.")
+        print(f"Excel catalog loaded: {len(all_configs)} model/part configurations.")
     except CatalogError as exc:
-        print(f"KRITIKUS KONFIGURÁCIÓS HIBA: {exc}")
+        print(f"CRITICAL CATALOG CONFIGURATION ERROR: {exc}")
         raise
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="welding-monitor")
 
+    # A broker visszajelzése után feliratkozom a hegesztési események témájára, és jelzem a kapcsolat állapotát.
     def on_connect(client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
         if reason_code == 0:
             client.subscribe(TOPIC, qos=1)
-            print(f"MQTT monitor csatlakozott; feliratkozva: {TOPIC}")
+            signal_monitor_ready()
+            print(f"MQTT monitor connected; subscribed to: {TOPIC}")
         else:
-            print(f"MQTT csatlakozási hiba: {reason_code}")
+            clear_monitor_ready()
+            print(f"MQTT connection error: {reason_code}")
 
+    # A kapcsolat megszűnését naplózom, és törlöm a monitor kész állapotát.
+    def on_disconnect(client: mqtt.Client, userdata: Any, disconnect_flags: Any, reason_code: Any, properties: Any) -> None:
+        clear_monitor_ready()
+        print(f"MQTT monitor disconnected: {reason_code}")
+
+    # A MQTT payloadot JSON-ként értelmezem, majd a közös eseményfeldolgozó függvénynek adom át.
     def on_message(client: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage) -> None:
         raw = message.payload.decode("utf-8", errors="replace")
         try:
             process_event(conn, json.loads(raw), log_dir=LOG_DIR)
         except (sqlite3.Error, TypeError, ValueError, KeyError) as exc:
-            print(f"Üzenetfeldolgozási hiba: {exc}")
+            print(f"Message processing error: {exc}")
             try:
                 log_processing_error(conn, "FELDOLGOZÁSI HIBA", str(exc), raw)
             except sqlite3.Error as db_exc:
-                print(f"A hibanapló adatbázis-hibája: {db_exc}")
+                print(f"System-error database logging failure: {db_exc}")
 
-    client.on_connect, client.on_message = on_connect, on_message
-    while True:
+    client.on_connect, client.on_disconnect, client.on_message = on_connect, on_disconnect, on_message
+    shutdown_file = LOG_DIR / "shutdown.request"
+    production_idle_file = LOG_DIR / "production_idle.ready"
+
+    # A leállítást csak akkor engedem véglegesíteni, ha a termelés már biztonságos ciklushatárhoz ért.
+    def shutdown_is_safe() -> bool:
+        # Keep receiving weld events until the active sidewall has a committed final verdict.
+        return shutdown_file.exists() and production_idle_file.exists()
+
+    try:
+        while not shutdown_is_safe():
+            try:
+                client.connect(BROKER_HOST, BROKER_PORT, keepalive=30)
+                client.loop_start()
+                print("MQTT monitor running. Waiting for production events or safe shutdown.")
+                while not shutdown_is_safe():
+                    time.sleep(0.25)
+                break
+            except (OSError, mqtt.MQTTException) as exc:
+                if shutdown_file.exists():
+                    break
+                print(f"MQTT broker unavailable ({exc}); retrying in 3 seconds.")
+                time.sleep(3)
+    finally:
+        clear_monitor_ready()
         try:
-            client.connect(BROKER_HOST, BROKER_PORT, keepalive=30)
-            client.loop_forever(retry_first_connection=True)
-        except (OSError, mqtt.MQTTException) as exc:
-            print(f"Broker még nem elérhető ({exc}); újrapróbálkozás 3 másodperc múlva.")
-            time.sleep(3)
+            client.disconnect()
+        except (OSError, mqtt.MQTTException):
+            pass
+        try:
+            client.loop_stop()
+        except (RuntimeError, mqtt.MQTTException):
+            pass
+        conn.close()
+        stopped_file = __import__("os").environ.get("BODYLINE_STOPPED_FILE")
+        if stopped_file:
+            try:
+                target = Path(stopped_file)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_suffix(target.suffix + ".tmp")
+                temporary.write_text("status=stopped", encoding="utf-8")
+                temporary.replace(target)
+            except OSError as exc:
+                print(f"WARNING: could not write monitor stop signal: {exc}")
+        print("MQTT monitor stopped cleanly.")
 
 
 if __name__ == "__main__":
