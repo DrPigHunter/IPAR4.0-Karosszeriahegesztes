@@ -1,0 +1,11 @@
+@startuml BODYLINE_PartState
+[*] --> CREATED
+CREATED --> IN_PROCESS : body_start
+IN_PROCESS --> ACCEPTED : body_complete / valid
+IN_PROCESS --> REWORK_WAITING : body_complete / invalid
+REWORK_WAITING --> REWORK_IN_PROGRESS : rework_action START
+REWORK_IN_PROGRESS --> READY_FOR_REINSPECTION : rework_action COMPLETE
+READY_FOR_REINSPECTION --> ACCEPTED : külön újraellenőrzés / megfelelt
+READY_FOR_REINSPECTION --> REWORK_WAITING : újraellenőrzés / nem felelt meg
+ACCEPTED --> [*]
+@enduml
