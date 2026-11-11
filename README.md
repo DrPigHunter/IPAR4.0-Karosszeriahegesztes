@@ -137,3 +137,44 @@ A Start_HegesztesSzimulacio.ps1 indítószkript biztonságosan újrafuttatható:
 - sikertelen indításnál nem nyit meg üres böngészőoldalt, hanem a logs/monitor.log és logs/dashboard.log naplókat jelöli meg hibakereséshez.
 
 Ha a localhost:8501 portot egy másik alkalmazás használja, az indítószkript nem indít rá második Streamlit-példányt: jelzi a foglalt portot és a folyamat PID-jét.
+
+## Hálózati beállítás – helyi gép vagy LAN
+
+Alapértelmezésben a szimulátor és a monitor a helyi `127.0.0.1:1883` Mosquitto brokerhez csatlakozik. Ha a broker egy másik gépen fut a helyi hálózaton, az indító PowerShell-ablakban a program indítása előtt állítsd be a környezeti változókat:
+
+```powershell
+$env:BODYLINE_MQTT_HOST = "192.168.1.50"
+$env:BODYLINE_MQTT_PORT = "1883"
+$env:BODYLINE_MQTT_TOPIC = "welding/events"
+.\Start_HegesztesSzimulacio.ps1
+```
+
+A `192.168.1.50` csak példa; a Docker/Mosquitto host tényleges IP-címét add meg. A broker portját a host tűzfalán a megbízható magánhálózati profilhoz kell engedélyezni. A publisher és a monitor ugyanazt a host/port/topic beállítást használja; a dashboard a monitor közös konfigurációját importálja.
+
+**Biztonság:** a mellékelt Mosquitto-konfiguráció anonim és titkosítatlan, ezért ez csak elkülönített oktatási hálózatban használható. A 1883-as portot ne tedd elérhetővé az internet felől. Üzemi használathoz hitelesítés, ACL, TLS és tűzfalszabályok szükségesek.
+
+## Virtuális érzékelők és beavatkozási pontok
+
+Az Élő gyártás fülön lenyitható a **Virtuális érzékelők, beavatkozási és kezelői pontok** panel. A projekt három virtuális mérőcsatornát használ: hegesztőáram (kA), hegesztési idő (ms) és elektródaerő (kN). Mindhárom egy-egy értéket ad minden hegesztési pont eseményéhez. A hegesztési esemény jelzi a virtuális csatornaazonosítót és azt, hogy az adat szimulált. Nincs valós érzékelő a rendszerhez csatlakoztatva.
+
+A logikai beavatkozási pontok a határok közötti paraméterkorrekció, az utómunka-sorba irányítás és a szimulált elektródaegység-csere. Ezek szoftveres döntések, nem fizikai aktuátorok. Az operátori interakciók: gyártásindítás/leállítás, sebességbeállítás, utómunka START/COMPLETE és riportexport.
+
+## UML-tervek és architektúra
+
+A `docs/uml/` mappa PlantUML forrásokat tartalmaz a használati esetekhez, telepítési nézethez, aktivitásdiagramhoz és munkadarab-állapotgéphez. A részletes 0. rendű adatfolyamdiagram, a mérési csatornák, az aktuátorhelyettesítések és a hálózati felépítés a `docs/architecture.md` fájlban található.
+
+PlantUML képek készítéséhez telepített PlantUML és Java szükséges:
+
+```powershell
+plantuml -tsvg docs/uml/*.puml
+```
+
+## Bemutatóvideó rögzítése
+
+A tárgy külön videót kér a rendszer működéséről. A felvételhez telepített FFmpeg mellett futtasd:
+
+```powershell
+.\tools\Record-Bodyline-Demo.ps1 -DurationSeconds 240
+```
+
+A segéd a teljes asztalt rögzíti, ezért előtte zárd be a személyes adatokat tartalmazó ablakokat. A felvétel javasolt helye: `docs/demo_video/BODYLINE_demo.mp4`. A forgatókönyv a `docs/video_demo_script.md` fájlban található. A felvétel és az MP4 GitHubra feltöltése kézzel végrehajtandó beadási lépés.
