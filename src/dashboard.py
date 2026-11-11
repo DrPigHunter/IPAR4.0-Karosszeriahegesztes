@@ -876,6 +876,7 @@ def render_production_tab() -> None:
     with head_left:
         st.markdown("## Gyártócella élő nézete")
         st.caption("Automatikus modellválasztás · MQTT · állítható szimulációs sebesség")
+        st.caption(f"MQTT végpont: {BROKER_HOST}:{BROKER_PORT} · {TOPIC}")
         with st.expander("Virtuális érzékelők, beavatkozási és kezelői pontok"):
             st.info(
                 "A mérési csatornák és beavatkozási pontok szoftveresen szimuláltak. "
