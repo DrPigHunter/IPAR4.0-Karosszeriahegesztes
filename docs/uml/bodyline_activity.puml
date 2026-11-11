@@ -1,0 +1,19 @@
+@startuml BODYLINE_Activity
+start
+:Operátor elindítja a gyártást;
+:Excel-konfiguráció betöltése;
+:Virtuális mérési jelek előállítása\n(áram, hegesztési idő, elektródaerő);
+:JSON esemény publikálása MQTT-n;
+:Monitor feliratkozik és eltárolja az eseményt;
+:Elvárt pontlista és paraméterhatárok ellenőrzése;
+if (Minden pont és paraméter megfelelő?) then (igen)
+  :Oldalfal MEGFELELŐ státusz;
+else (nem)
+  :Hiba rögzítése;
+  :Oldalfal utómunka-sorba irányítása;
+  :Operátor START / COMPLETE műveletet végez;
+  :Újraellenőrzésre kész státusz;
+endif
+:Dashboard statisztika és riport frissítése;
+stop
+@enduml
