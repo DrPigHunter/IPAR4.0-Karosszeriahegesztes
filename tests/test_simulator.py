@@ -29,6 +29,9 @@ class SimulatorTests(unittest.TestCase):
             self.assertEqual([event["weld_id"] for event in weld_events], config["expected_weld_ids"])
             self.assertTrue(all("simulated_variation" not in event for event in weld_events))
             self.assertEqual(len({event["weld_id"] for event in weld_events}), config["expected_count"])
+            self.assertTrue(all(event["signal_origin"] == "SIMULATED_VIRTUAL_SENSOR" for event in weld_events))
+            self.assertTrue(all(event["sensor_sources"]["current_ka"] == "VS-CURRENT-01" for event in weld_events))
+            self.assertTrue(all(event["sampling_method"] == "ONE_EVENT_SAMPLE_PER_WELD_POINT" for event in weld_events))
 
     # Nulla teszthiba-esélynél ne legyen szándékos paramétereltérés.
     def test_zero_probability_means_no_injected_measurements(self):
