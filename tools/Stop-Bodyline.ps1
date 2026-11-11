@@ -99,21 +99,26 @@ try {
         throw "BODYLINE service process(es) could not be stopped. Remaining PID(s): $pids"
     }
 
-    # Stop only this project's MQTT service; Docker Desktop itself remains available.
-    $docker = Get-Command docker -ErrorAction SilentlyContinue
-    if ($null -eq $docker) { throw "Docker command was not found; BODYLINE processes stopped but MQTT container may still be running." }
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        & docker compose stop mqtt 2>&1 | Tee-Object -FilePath $shutdownLog -Append
-        $dockerExitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
+    # A helyi broker a BODYLINE része; külső LAN-brokerhez nem nyúlok hozzá.
+    $brokerHost = if ([string]::IsNullOrWhiteSpace($env:BODYLINE_MQTT_HOST)) { "127.0.0.1" } else { $env:BODYLINE_MQTT_HOST.Trim() }
+    $usesLocalBroker = $brokerHost -in @("127.0.0.1", "localhost", "::1")
+    if ($usesLocalBroker) {
+        $docker = Get-Command docker -ErrorAction SilentlyContinue
+        if ($null -eq $docker) { throw "Docker command was not found; BODYLINE processes stopped but MQTT container may still be running." }
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & docker compose stop mqtt 2>&1 | Tee-Object -FilePath $shutdownLog -Append
+            $dockerExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($dockerExitCode -ne 0) {
+            throw "Docker Compose could not stop the BODYLINE MQTT container (exit code $dockerExitCode)."
+        }
+    } else {
+        Add-Content -LiteralPath $shutdownLog -Value "External MQTT broker $brokerHost was left running." -Encoding UTF8
     }
-    if ($dockerExitCode -ne 0) {
-        throw "Docker Compose could not stop the BODYLINE MQTT container (exit code $dockerExitCode)."
-    }
-
     Remove-Item -LiteralPath (Join-Path $logDir "monitor.ready") -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $monitorStopped -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $logDir "dashboard.ready") -Force -ErrorAction SilentlyContinue
@@ -121,7 +126,7 @@ try {
     Add-ProductionLogLine "ALL BODYLINE SERVICES STOPPED"
     Add-Content -LiteralPath $shutdownLog -Value "[$(Get-Date -Format s)] BODYLINE shutdown completed successfully." -Encoding UTF8
     Remove-Item -LiteralPath $shutdownRequest -Force -ErrorAction SilentlyContinue
-    Write-Host "BODYLINE dashboard, monitor and MQTT container have been stopped."
+    if ($usesLocalBroker) { Write-Host "BODYLINE dashboard, monitor and local MQTT container have been stopped." } else { Write-Host "BODYLINE dashboard and monitor have been stopped; the external MQTT broker remains available." }
 } catch {
     $message = $_.Exception.Message
     Add-Content -LiteralPath $shutdownLog -Value "[$(Get-Date -Format s)] SHUTDOWN ERROR: $message" -Encoding UTF8
